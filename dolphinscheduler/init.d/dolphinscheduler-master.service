@@ -1,0 +1,19 @@
+[Unit]
+Description=Apache DolphinScheduler Master Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=@RUN_USER@
+Group=@RUN_GROUP@
+Environment="JAVA_HOME=@JAVA_HOME@"
+ExecStart=@INSTALL_DIR@/bin/dolphinscheduler-daemon.sh start master-server
+ExecStop=@INSTALL_DIR@/bin/dolphinscheduler-daemon.sh stop master-server
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target

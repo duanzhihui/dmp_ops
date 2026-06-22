@@ -1,0 +1,567 @@
+#!/bin/bash
+# DolphinSchedulerStack - Apache DolphinScheduler Cluster Deployment Tool
+# DolphinScheduler installation and uninstallation functions
+
+# Install DolphinScheduler Standalone mode
+Install_DolphinScheduler_Standalone() {
+  local ds_ver=$1
+  local ds_pkg=$(Get_DolphinScheduler_Pkg "${ds_ver}")
+
+  echo "${CMSG}Installing DolphinScheduler ${ds_ver} (Standalone mode)...${CEND}"
+
+  # Check if already installed
+  if [ -d "${dolphinscheduler_install_dir}" ] && [ -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
+    echo "${CWARNING}DolphinScheduler is already installed at ${dolphinscheduler_install_dir}${CEND}"
+    return 0
+  fi
+
+  # Create directories
+  mkdir -p ${dolphinscheduler_install_dir}
+  mkdir -p ${dolphinscheduler_data_dir}
+  mkdir -p ${dolphinscheduler_log_dir}
+
+  # Extract package
+  echo "${CMSG}Extracting ${ds_pkg}...${CEND}"
+  tar xzf ${ds_dir}/src/${ds_pkg} -C ${dolphinscheduler_install_dir} --strip-components=1
+
+  if [ ! -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
+    echo "${CFAILURE}Failed to extract DolphinScheduler package!${CEND}"
+    return 1
+  fi
+
+  # Configure JAVA_HOME in dolphinscheduler_env.sh
+  Configure_Env_Standalone "${ds_ver}"
+
+  # Set ownership
+  chown -R ${run_user}:${run_group} ${dolphinscheduler_install_dir}
+  chown -R ${run_user}:${run_group} ${dolphinscheduler_data_dir}
+  chown -R ${run_user}:${run_group} ${dolphinscheduler_log_dir}
+
+  # Install systemd service
+  Install_Standalone_Service
+
+  echo "${CSUCCESS}DolphinScheduler ${ds_ver} (Standalone) installed successfully!${CEND}"
+}
+
+# Configure environment for Standalone mode
+Configure_Env_Standalone() {
+  local ds_ver=$1
+  local env_file="${dolphinscheduler_install_dir}/bin/env/dolphinscheduler_env.sh"
+
+  echo "${CMSG}Configuring environment...${CEND}"
+
+  if [ -f "${env_file}" ]; then
+    # Remove any existing DolphinSchedulerStack configuration block
+    sed -i '/^# DolphinSchedulerStack Configuration/,/^# End DolphinSchedulerStack Configuration/d' ${env_file}
+
+    # Append JAVA_HOME configuration
+    if [ -n "${JAVA_HOME}" ]; then
+      cat >> ${env_file} << EOF
+
+# DolphinSchedulerStack Configuration
+export JAVA_HOME=${JAVA_HOME}
+# End DolphinSchedulerStack Configuration
+EOF
+    fi
+    echo "${CSUCCESS}Environment variables configured in ${env_file}${CEND}"
+  fi
+}
+
+# Install DolphinScheduler Pseudo-Cluster mode
+Install_DolphinScheduler_PseudoCluster() {
+  local ds_ver=$1
+  local ds_pkg=$(Get_DolphinScheduler_Pkg "${ds_ver}")
+
+  echo "${CMSG}Installing DolphinScheduler ${ds_ver} (Pseudo-Cluster mode)...${CEND}"
+
+  # Check if already installed
+  if [ -d "${dolphinscheduler_install_dir}" ] && [ -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
+    echo "${CWARNING}DolphinScheduler is already installed at ${dolphinscheduler_install_dir}${CEND}"
+    return 0
+  fi
+
+  # Create directories
+  mkdir -p ${dolphinscheduler_install_dir}
+  mkdir -p ${dolphinscheduler_data_dir}
+  mkdir -p ${dolphinscheduler_log_dir}
+
+  # Extract package
+  echo "${CMSG}Extracting ${ds_pkg}...${CEND}"
+  tar xzf ${ds_dir}/src/${ds_pkg} -C ${dolphinscheduler_install_dir} --strip-components=1
+
+  if [ ! -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
+    echo "${CFAILURE}Failed to extract DolphinScheduler package!${CEND}"
+    return 1
+  fi
+
+  # Download and install MySQL JDBC driver if using MySQL
+  if [ "${db_type}" == "mysql" ]; then
+    Download_MySQL_JDBC
+    Install_MySQL_JDBC
+  fi
+
+  # Configure environment
+  Configure_Env_PseudoCluster "${ds_ver}"
+
+  # Configure install_env.sh
+  Configure_Install_Env
+
+  # Initialize database
+  Init_Database
+
+  # Set ownership
+  chown -R ${run_user}:${run_group} ${dolphinscheduler_install_dir}
+  chown -R ${run_user}:${run_group} ${dolphinscheduler_data_dir}
+  chown -R ${run_user}:${run_group} ${dolphinscheduler_log_dir}
+
+  # Install systemd services
+  Install_PseudoCluster_Services
+
+  echo "${CSUCCESS}DolphinScheduler ${ds_ver} (Pseudo-Cluster) installed successfully!${CEND}"
+}
+
+# Configure environment for Pseudo-Cluster mode
+Configure_Env_PseudoCluster() {
+  local ds_ver=$1
+  local env_file="${dolphinscheduler_install_dir}/bin/env/dolphinscheduler_env.sh"
+
+  echo "${CMSG}Configuring environment for Pseudo-Cluster...${CEND}"
+
+  if [ -f "${env_file}" ]; then
+    # Build JDBC URL based on database type
+    local jdbc_url driver_class
+    if [ "${db_type}" == "mysql" ]; then
+      jdbc_url="jdbc:mysql://${db_host}:${db_port}/${db_name}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&allowPublicKeyRetrieval=true"
+      driver_class="com.mysql.cj.jdbc.Driver"
+    else
+      jdbc_url="jdbc:postgresql://${db_host}:${db_port}/${db_name}"
+      driver_class="org.postgresql.Driver"
+    fi
+
+    # Append environment variables to the file
+    # First remove any existing DolphinSchedulerStack configuration block
+    sed -i '/^# DolphinSchedulerStack Configuration/,/^# End DolphinSchedulerStack Configuration/d' ${env_file}
+
+    # Append new configuration block
+    cat >> ${env_file} << EOF
+
+# DolphinSchedulerStack Configuration
+export JAVA_HOME=${JAVA_HOME}
+export DATABASE=${db_type}
+export SPRING_PROFILES_ACTIVE=${db_type}
+export SPRING_DATASOURCE_URL="${jdbc_url}"
+export SPRING_DATASOURCE_USERNAME=${db_user}
+export SPRING_DATASOURCE_PASSWORD="${db_password}"
+export SPRING_DATASOURCE_DRIVER_CLASS_NAME=${driver_class}
+export REGISTRY_TYPE=zookeeper
+export REGISTRY_ZOOKEEPER_CONNECT_STRING=${zk_hosts}
+# End DolphinSchedulerStack Configuration
+EOF
+
+    echo "${CSUCCESS}Environment variables configured in ${env_file}${CEND}"
+  else
+    echo "${CFAILURE}Environment file not found: ${env_file}${CEND}"
+    return 1
+  fi
+
+  # Configure application.yaml files for each module
+  Configure_Application_Yaml
+}
+
+# Configure install_env.sh
+Configure_Install_Env() {
+  local install_env_file="${dolphinscheduler_install_dir}/bin/env/install_env.sh"
+
+  echo "${CMSG}Configuring install_env.sh...${CEND}"
+
+  if [ -f "${install_env_file}" ]; then
+    sed -i "s|^ips=.*|ips=\"${ips}\"|" ${install_env_file}
+    sed -i "s|^sshPort=.*|sshPort=\"${ssh_port}\"|" ${install_env_file}
+    sed -i "s|^masters=.*|masters=\"${masters}\"|" ${install_env_file}
+    sed -i "s|^workers=.*|workers=\"${workers}\"|" ${install_env_file}
+    sed -i "s|^alertServer=.*|alertServer=\"${alert_server}\"|" ${install_env_file}
+    sed -i "s|^apiServers=.*|apiServers=\"${api_servers}\"|" ${install_env_file}
+    sed -i "s|^installPath=.*|installPath=${dolphinscheduler_install_dir}|" ${install_env_file}
+    sed -i "s|^deployUser=.*|deployUser=\"${run_user}\"|" ${install_env_file}
+  fi
+}
+
+# Configure application.yaml files
+Configure_Application_Yaml() {
+  local modules=("tools" "alert-server" "api-server" "master-server" "worker-server")
+
+  for module in "${modules[@]}"; do
+    local yaml_file="${dolphinscheduler_install_dir}/${module}/conf/application.yaml"
+    if [ -f "${yaml_file}" ]; then
+      echo "${CMSG}Configuring ${module}/conf/application.yaml...${CEND}"
+
+      # Note: Do NOT modify spring.profiles.active or database settings in application.yaml
+      # DolphinScheduler 3.x uses multi-document YAML format with separate configs for each DB type (mysql/postgresql/h2)
+      # All database configuration is passed via environment variables in dolphinscheduler_env.sh:
+      #   - SPRING_PROFILES_ACTIVE (mysql or postgresql)
+      #   - SPRING_DATASOURCE_URL
+      #   - SPRING_DATASOURCE_USERNAME  
+      #   - SPRING_DATASOURCE_PASSWORD
+      #   - SPRING_DATASOURCE_DRIVER_CLASS_NAME
+      
+      # Only configure module-specific settings (ports, binding address)
+      case "${module}" in
+        api-server)
+          Configure_Api_Server_Binding "${yaml_file}"
+          Configure_Server_Port "${yaml_file}" "${api_port}"
+          ;;
+        master-server)
+          Configure_Server_Port "${yaml_file}" "${master_port}"
+          ;;
+        worker-server)
+          Configure_Server_Port "${yaml_file}" "${worker_port}"
+          ;;
+        alert-server)
+          Configure_Server_Port "${yaml_file}" "${alert_port}"
+          ;;
+      esac
+    fi
+  done
+}
+
+# Configure server port in application.yaml
+# Only modifies the port under the 'server:' section in the first YAML document
+Configure_Server_Port() {
+  local yaml_file=$1
+  local port=$2
+  
+  [ -z "${port}" ] && return
+  
+  # Use awk to only modify port under server: section before any --- separator
+  # This ensures we don't modify ports in other YAML documents (e.g., database configs)
+  awk -v port="${port}" '
+    BEGIN { in_server=0; done=0 }
+    /^---/ { in_server=0 }
+    /^server:/ { in_server=1 }
+    in_server && /^[[:space:]]+port:/ && !done {
+      sub(/port:.*/, "port: " port)
+      done=1
+    }
+    { print }
+  ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
+}
+
+# Configure API server to bind to 0.0.0.0 for external access
+# Only modifies the address under the 'server:' section in the first YAML document
+Configure_Api_Server_Binding() {
+  local yaml_file=$1
+  
+  echo "${CMSG}Configuring API server to listen on 0.0.0.0...${CEND}"
+  
+  # Check if server section exists in the first YAML document
+  if awk '/^---/{exit} /^server:/{found=1} END{exit !found}' "${yaml_file}"; then
+    # Use awk to add or modify address under server: section
+    awk '
+      BEGIN { in_server=0; done=0; has_address=0 }
+      /^---/ { in_server=0 }
+      /^server:/ { in_server=1; print; next }
+      in_server && /^[[:space:]]+address:/ && !done {
+        print "  address: 0.0.0.0"
+        done=1
+        has_address=1
+        next
+      }
+      in_server && /^[^[:space:]]/ && !has_address && !done {
+        # Reached next top-level key without finding address, insert it
+        print "  address: 0.0.0.0"
+        done=1
+        in_server=0
+      }
+      { print }
+      END {
+        # If we were still in server section at EOF and no address was set
+        if (in_server && !done) {
+          print "  address: 0.0.0.0"
+        }
+      }
+    ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
+  else
+    # Add server section at the beginning
+    local tmp_file=$(mktemp)
+    printf "server:\n  address: 0.0.0.0\n\n" > "${tmp_file}"
+    cat "${yaml_file}" >> "${tmp_file}"
+    mv "${tmp_file}" "${yaml_file}"
+  fi
+}
+
+# Install MySQL JDBC driver to all modules
+Install_MySQL_JDBC() {
+  local jdbc_ver=${mysql_jdbc_ver:-8.0.33}
+  local jdbc_jar="mysql-connector-j-${jdbc_ver}.jar"
+  local modules=("tools/libs" "alert-server/libs" "api-server/libs" "master-server/libs" "worker-server/libs")
+
+  echo "${CMSG}Installing MySQL JDBC driver to all modules...${CEND}"
+
+  for module in "${modules[@]}"; do
+    local target_dir="${dolphinscheduler_install_dir}/${module}"
+    if [ -d "${target_dir}" ]; then
+      Extract_MySQL_JDBC "${target_dir}"
+    fi
+  done
+}
+
+# Initialize database
+Init_Database() {
+  echo "${CMSG}Initializing database...${CEND}"
+
+  local tools_dir="${dolphinscheduler_install_dir}/tools"
+
+  if [ -f "${tools_dir}/bin/upgrade-schema.sh" ]; then
+    pushd ${tools_dir} > /dev/null
+    
+    # Set environment variables explicitly for database initialization
+    export DATABASE=${db_type}
+    export SPRING_PROFILES_ACTIVE=${db_type}
+    
+    if [ "${db_type}" == "mysql" ]; then
+      export SPRING_DATASOURCE_URL="jdbc:mysql://${db_host}:${db_port}/${db_name}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&allowPublicKeyRetrieval=true"
+      export SPRING_DATASOURCE_DRIVER_CLASS_NAME="com.mysql.cj.jdbc.Driver"
+    else
+      export SPRING_DATASOURCE_URL="jdbc:postgresql://${db_host}:${db_port}/${db_name}"
+      export SPRING_DATASOURCE_DRIVER_CLASS_NAME="org.postgresql.Driver"
+    fi
+    export SPRING_DATASOURCE_USERNAME=${db_user}
+    export SPRING_DATASOURCE_PASSWORD="${db_password}"
+    
+    # Source environment file (for JAVA_HOME etc.)
+    source ${dolphinscheduler_install_dir}/bin/env/dolphinscheduler_env.sh
+    
+    # Run schema initialization
+    bash bin/upgrade-schema.sh
+    local ret=$?
+    popd > /dev/null
+    
+    if [ ${ret} -eq 0 ]; then
+      echo "${CSUCCESS}Database initialized successfully!${CEND}"
+    else
+      echo "${CFAILURE}Database initialization failed! Please check logs.${CEND}"
+      return 1
+    fi
+  else
+    echo "${CWARNING}upgrade-schema.sh not found. Please initialize database manually.${CEND}"
+  fi
+}
+
+# Install Standalone systemd service
+Install_Standalone_Service() {
+  echo "${CMSG}Installing Standalone systemd service...${CEND}"
+
+  cat > /lib/systemd/system/dolphinscheduler-standalone.service << EOF
+[Unit]
+Description=Apache DolphinScheduler Standalone Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=${run_user}
+Group=${run_group}
+Environment="JAVA_HOME=${JAVA_HOME}"
+ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start standalone-server
+ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop standalone-server
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable dolphinscheduler-standalone
+  echo "${CSUCCESS}Standalone service installed.${CEND}"
+}
+
+# Install Pseudo-Cluster systemd services
+Install_PseudoCluster_Services() {
+  echo "${CMSG}Installing Pseudo-Cluster systemd services...${CEND}"
+
+  # Master Server
+  cat > /lib/systemd/system/dolphinscheduler-master.service << EOF
+[Unit]
+Description=Apache DolphinScheduler Master Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=${run_user}
+Group=${run_group}
+Environment="JAVA_HOME=${JAVA_HOME}"
+ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start master-server
+ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop master-server
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Worker Server
+  cat > /lib/systemd/system/dolphinscheduler-worker.service << EOF
+[Unit]
+Description=Apache DolphinScheduler Worker Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=${run_user}
+Group=${run_group}
+Environment="JAVA_HOME=${JAVA_HOME}"
+ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start worker-server
+ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop worker-server
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # API Server
+  cat > /lib/systemd/system/dolphinscheduler-api.service << EOF
+[Unit]
+Description=Apache DolphinScheduler API Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=${run_user}
+Group=${run_group}
+Environment="JAVA_HOME=${JAVA_HOME}"
+ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start api-server
+ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop api-server
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  # Alert Server
+  cat > /lib/systemd/system/dolphinscheduler-alert.service << EOF
+[Unit]
+Description=Apache DolphinScheduler Alert Server
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=${run_user}
+Group=${run_group}
+Environment="JAVA_HOME=${JAVA_HOME}"
+ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start alert-server
+ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop alert-server
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable dolphinscheduler-master
+  systemctl enable dolphinscheduler-worker
+  systemctl enable dolphinscheduler-api
+  systemctl enable dolphinscheduler-alert
+  echo "${CSUCCESS}Pseudo-Cluster services installed.${CEND}"
+}
+
+# Start Standalone server
+Start_Standalone() {
+  echo "${CMSG}Starting DolphinScheduler Standalone Server...${CEND}"
+  systemctl start dolphinscheduler-standalone
+
+  sleep 5
+  if systemctl is-active --quiet dolphinscheduler-standalone; then
+    echo "${CSUCCESS}Standalone Server started successfully!${CEND}"
+  else
+    echo "${CFAILURE}Failed to start Standalone Server!${CEND}"
+    journalctl -u dolphinscheduler-standalone --no-pager -n 20
+    return 1
+  fi
+}
+
+# Start Pseudo-Cluster services
+Start_PseudoCluster() {
+  echo "${CMSG}Starting DolphinScheduler Pseudo-Cluster services...${CEND}"
+
+  # Start in order: Master -> Worker -> API -> Alert
+  systemctl start dolphinscheduler-master
+  sleep 3
+  systemctl start dolphinscheduler-worker
+  sleep 3
+  systemctl start dolphinscheduler-api
+  sleep 3
+  systemctl start dolphinscheduler-alert
+
+  sleep 5
+  echo "${CMSG}Checking service status...${CEND}"
+  systemctl status dolphinscheduler-master --no-pager
+  systemctl status dolphinscheduler-worker --no-pager
+  systemctl status dolphinscheduler-api --no-pager
+  systemctl status dolphinscheduler-alert --no-pager
+}
+
+# Uninstall DolphinScheduler
+Uninstall_DolphinScheduler() {
+  echo "${CMSG}Uninstalling DolphinScheduler...${CEND}"
+
+  # Stop all services
+  systemctl stop dolphinscheduler-standalone 2>/dev/null
+  systemctl stop dolphinscheduler-master 2>/dev/null
+  systemctl stop dolphinscheduler-worker 2>/dev/null
+  systemctl stop dolphinscheduler-api 2>/dev/null
+  systemctl stop dolphinscheduler-alert 2>/dev/null
+
+  # Disable services
+  systemctl disable dolphinscheduler-standalone 2>/dev/null
+  systemctl disable dolphinscheduler-master 2>/dev/null
+  systemctl disable dolphinscheduler-worker 2>/dev/null
+  systemctl disable dolphinscheduler-api 2>/dev/null
+  systemctl disable dolphinscheduler-alert 2>/dev/null
+
+  # Remove service files
+  rm -f /lib/systemd/system/dolphinscheduler-standalone.service
+  rm -f /lib/systemd/system/dolphinscheduler-master.service
+  rm -f /lib/systemd/system/dolphinscheduler-worker.service
+  rm -f /lib/systemd/system/dolphinscheduler-api.service
+  rm -f /lib/systemd/system/dolphinscheduler-alert.service
+  systemctl daemon-reload
+
+  # Backup data directory
+  if [ -d "${dolphinscheduler_data_dir}" ]; then
+    local backup_name="${dolphinscheduler_data_dir}_$(date +%Y%m%d%H%M%S)"
+    echo "${CMSG}Backing up data directory to ${backup_name}...${CEND}"
+    mv ${dolphinscheduler_data_dir} ${backup_name}
+  fi
+
+  # Remove installation directory
+  if [ -d "${dolphinscheduler_install_dir}" ]; then
+    rm -rf ${dolphinscheduler_install_dir}
+    echo "${CSUCCESS}Removed ${dolphinscheduler_install_dir}${CEND}"
+  fi
+
+  # Remove log directory
+  if [ -d "${dolphinscheduler_log_dir}" ]; then
+    rm -rf ${dolphinscheduler_log_dir}
+    echo "${CSUCCESS}Removed ${dolphinscheduler_log_dir}${CEND}"
+  fi
+
+  echo "${CSUCCESS}DolphinScheduler uninstalled successfully!${CEND}"
+}

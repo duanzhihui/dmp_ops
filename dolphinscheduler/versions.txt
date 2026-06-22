@@ -1,0 +1,16 @@
+# Apache DolphinScheduler versions
+# Supported versions: 3.2.x, 3.3.x, 3.4.x
+# Package format: apache-dolphinscheduler-<ver>-bin.tar.gz
+
+dolphinscheduler34_ver=3.4.1
+dolphinscheduler33_ver=3.3.2
+dolphinscheduler32_ver=3.2.2
+
+# JDK version (DolphinScheduler requires JDK 8+)
+jdk8_ver=8u392
+
+# MySQL JDBC Driver version
+mysql_jdbc_ver=8.0.33
+
+# ZooKeeper version (required for pseudo-cluster and cluster mode)
+zookeeper_ver=3.9.3
