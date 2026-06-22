@@ -1,0 +1,452 @@
+#!/bin/bash
+# DorisStack - Apache Doris Cluster Deployment Tool
+# Cluster deployment functions
+#
+# Supports:
+#   integrated  - 存算一体集群 (FE + BE)
+#   separated   - 存算分离集群 (FDB + MS + FE + BE + Storage Vault, 3.x+)
+
+# ========================================================================
+# 存算一体 (Integrated Storage-Compute) Cluster Deployment
+# ========================================================================
+Deploy_Integrated_Cluster() {
+  local doris_ver=$1
+
+  echo "${CMSG}============================================${CEND}"
+  echo "${CMSG}  Deploying 存算一体 Cluster ${doris_ver}${CEND}"
+  echo "${CMSG}============================================${CEND}"
+
+  # Parse FE nodes
+  IFS=',' read -ra FE_ARRAY <<< "${fe_nodes}"
+  if [ ${#FE_ARRAY[@]} -eq 0 ]; then
+    echo "${CFAILURE}No FE nodes configured! Please set fe_nodes in options.conf${CEND}"
+    return 1
+  fi
+
+  # Parse BE nodes
+  IFS=',' read -ra BE_ARRAY <<< "${be_nodes}"
+  if [ ${#BE_ARRAY[@]} -eq 0 ]; then
+    echo "${CFAILURE}No BE nodes configured! Please set be_nodes in options.conf${CEND}"
+    return 1
+  fi
+
+  local master_fe_host=$(echo ${FE_ARRAY[0]} | awk -F: '{print $1}')
+  local master_fe_port=$(echo ${FE_ARRAY[0]} | awk -F: '{print $2}')
+  master_fe_port=${master_fe_port:-${fe_edit_log_port}}
+
+  echo "${CMSG}FE Master: ${master_fe_host}:${master_fe_port}${CEND}"
+  echo "${CMSG}FE nodes: ${#FE_ARRAY[@]}${CEND}"
+  echo "${CMSG}BE nodes: ${#BE_ARRAY[@]}${CEND}"
+
+  # Step 1: Deploy FE Master
+  echo ""
+  echo "${CMSG}[Step 1/4] Deploying FE Master on ${master_fe_host}...${CEND}"
+  Remote_Deploy_FE "${master_fe_host}" "${doris_ver}" ""
+
+  # Wait for FE Master to start
+  Wait_FE_Ready "${master_fe_host}" || return 1
+
+  # Step 2: Deploy FE Followers
+  if [ ${#FE_ARRAY[@]} -gt 1 ]; then
+    echo ""
+    echo "${CMSG}[Step 2/4] Deploying FE Follower nodes...${CEND}"
+    for ((i=1; i<${#FE_ARRAY[@]}; i++)); do
+      local fe_host=$(echo ${FE_ARRAY[$i]} | awk -F: '{print $1}')
+      local fe_port=$(echo ${FE_ARRAY[$i]} | awk -F: '{print $2}')
+      fe_port=${fe_port:-${fe_edit_log_port}}
+
+      echo "${CMSG}  Registering FE Follower: ${fe_host}:${fe_port}${CEND}"
+      Register_FE_Follower "${master_fe_host}" "${fe_host}" "${fe_port}"
+      Remote_Deploy_FE "${fe_host}" "${doris_ver}" "${master_fe_host}:${master_fe_port}"
+    done
+  else
+    echo ""
+    echo "${CMSG}[Step 2/4] Skipped (single FE node)${CEND}"
+  fi
+
+  # Step 3: Deploy BE nodes
+  echo ""
+  echo "${CMSG}[Step 3/4] Deploying BE nodes...${CEND}"
+  for be_node in "${BE_ARRAY[@]}"; do
+    local be_host=$(echo ${be_node} | awk -F: '{print $1}')
+    local be_port=$(echo ${be_node} | awk -F: '{print $2}')
+    be_port=${be_port:-${be_heartbeat_service_port}}
+
+    echo "${CMSG}  Registering BE: ${be_host}:${be_port}${CEND}"
+    Register_BE "${master_fe_host}" "${be_host}" "${be_port}"
+    Remote_Deploy_BE "${be_host}" "${doris_ver}"
+  done
+
+  # Step 4: Verify cluster
+  echo ""
+  echo "${CMSG}[Step 4/4] Verifying cluster...${CEND}"
+  sleep 10
+  Verify_Cluster "${master_fe_host}"
+
+  Print_Cluster_Summary "${master_fe_host}" "integrated"
+}
+
+# ========================================================================
+# 存算分离 (Separating Storage-Compute) Cluster Deployment
+# ========================================================================
+Deploy_Separated_Cluster() {
+  local doris_ver=$1
+  local major_ver=${doris_ver%%.*}
+
+  echo "${CMSG}============================================${CEND}"
+  echo "${CMSG}  Deploying 存算分离 Cluster ${doris_ver}${CEND}"
+  echo "${CMSG}============================================${CEND}"
+
+  # Version check
+  if [ "${major_ver}" -lt 3 ]; then
+    echo "${CFAILURE}Doris ${doris_ver} does not support 存算分离 mode!${CEND}"
+    echo "${CFAILURE}Separating storage-compute requires Doris 3.x+${CEND}"
+    return 1
+  fi
+
+  # Parse nodes
+  IFS=',' read -ra FE_ARRAY <<< "${fe_nodes}"
+  IFS=',' read -ra BE_ARRAY <<< "${be_nodes}"
+  IFS=',' read -ra FDB_ARRAY <<< "${fdb_nodes}"
+  IFS=',' read -ra MS_ARRAY <<< "${ms_nodes}"
+
+  if [ ${#FE_ARRAY[@]} -eq 0 ]; then
+    echo "${CFAILURE}No FE nodes configured!${CEND}"; return 1
+  fi
+  if [ ${#BE_ARRAY[@]} -eq 0 ]; then
+    echo "${CFAILURE}No BE nodes configured!${CEND}"; return 1
+  fi
+  if [ ${#FDB_ARRAY[@]} -eq 0 ]; then
+    echo "${CFAILURE}No FDB nodes configured! Required for 存算分离 mode.${CEND}"; return 1
+  fi
+  if [ ${#MS_ARRAY[@]} -eq 0 ]; then
+    echo "${CFAILURE}No MS nodes configured! Required for 存算分离 mode.${CEND}"; return 1
+  fi
+
+  local total_steps=8
+  local master_fe_host=$(echo ${FE_ARRAY[0]} | awk -F: '{print $1}')
+  local master_fe_port=$(echo ${FE_ARRAY[0]} | awk -F: '{print $2}')
+  master_fe_port=${master_fe_port:-${fe_edit_log_port}}
+
+  echo "${CMSG}Architecture: 存算分离 (Separating Storage-Compute)${CEND}"
+  echo "${CMSG}FDB nodes: ${#FDB_ARRAY[@]}${CEND}"
+  echo "${CMSG}MS  nodes: ${#MS_ARRAY[@]}${CEND}"
+  echo "${CMSG}FE  nodes: ${#FE_ARRAY[@]}${CEND}"
+  echo "${CMSG}BE  nodes: ${#BE_ARRAY[@]}${CEND}"
+
+  # Step 1: Deploy FoundationDB
+  echo ""
+  echo "${CMSG}[Step 1/${total_steps}] Deploying FoundationDB...${CEND}"
+  Deploy_FDB_With_Scripts "${doris_ver}"
+  if [ -z "${fdb_cluster}" ]; then
+    echo "${CFAILURE}FDB deployment failed or cluster string not available!${CEND}"
+    return 1
+  fi
+
+  # Step 2: (Optional) S3/HDFS - just validate config
+  echo ""
+  echo "${CMSG}[Step 2/${total_steps}] Checking storage backend...${CEND}"
+  if [ "${storage_vault_type}" == "S3" ] && [ -n "${s3_endpoint}" ]; then
+    echo "${CSUCCESS}S3 storage configured: ${s3_endpoint}/${s3_bucket}${CEND}"
+  elif [ "${storage_vault_type}" == "HDFS" ] && [ -n "${hdfs_defaultfs}" ]; then
+    echo "${CSUCCESS}HDFS storage configured: ${hdfs_defaultfs}${CEND}"
+  else
+    echo "${CWARNING}Storage Vault not pre-configured. You can configure it after deployment.${CEND}"
+  fi
+
+  # Step 3: Deploy Meta Service
+  echo ""
+  echo "${CMSG}[Step 3/${total_steps}] Deploying Meta Service...${CEND}"
+  for ms_node in "${MS_ARRAY[@]}"; do
+    local ms_host=$(echo ${ms_node} | awk -F: '{print $1}')
+    Remote_Deploy_MS "${ms_host}" "${doris_ver}"
+  done
+
+  # Step 4: (Optional) Data recycling - skip for now
+  echo ""
+  echo "${CMSG}[Step 4/${total_steps}] Data recycling (skipped, uses MS default)${CEND}"
+
+  # Step 5: Deploy FE Master
+  echo ""
+  echo "${CMSG}[Step 5/${total_steps}] Deploying FE Master on ${master_fe_host}...${CEND}"
+  Remote_Deploy_FE "${master_fe_host}" "${doris_ver}" ""
+
+  Wait_FE_Ready "${master_fe_host}" || return 1
+
+  # Step 6: Deploy FE Followers
+  if [ ${#FE_ARRAY[@]} -gt 1 ]; then
+    echo ""
+    echo "${CMSG}[Step 6/${total_steps}] Deploying FE Follower nodes...${CEND}"
+    for ((i=1; i<${#FE_ARRAY[@]}; i++)); do
+      local fe_host=$(echo ${FE_ARRAY[$i]} | awk -F: '{print $1}')
+      local fe_port=$(echo ${FE_ARRAY[$i]} | awk -F: '{print $2}')
+      fe_port=${fe_port:-${fe_edit_log_port}}
+
+      Register_FE_Follower "${master_fe_host}" "${fe_host}" "${fe_port}"
+      Remote_Deploy_FE "${fe_host}" "${doris_ver}" "${master_fe_host}:${master_fe_port}"
+    done
+  else
+    echo ""
+    echo "${CMSG}[Step 6/${total_steps}] Skipped (single FE node)${CEND}"
+  fi
+
+  # Step 7: Deploy BE nodes
+  echo ""
+  echo "${CMSG}[Step 7/${total_steps}] Deploying BE nodes...${CEND}"
+  for be_node in "${BE_ARRAY[@]}"; do
+    local be_host=$(echo ${be_node} | awk -F: '{print $1}')
+    local be_port=$(echo ${be_node} | awk -F: '{print $2}')
+    be_port=${be_port:-${be_heartbeat_service_port}}
+
+    Register_BE "${master_fe_host}" "${be_host}" "${be_port}"
+    Remote_Deploy_BE "${be_host}" "${doris_ver}"
+  done
+
+  # Step 8: Create Storage Vault
+  echo ""
+  echo "${CMSG}[Step 8/${total_steps}] Configuring Storage Vault...${CEND}"
+  Create_Storage_Vault "${master_fe_host}"
+
+  # Verify
+  sleep 10
+  Verify_Cluster "${master_fe_host}"
+
+  Print_Cluster_Summary "${master_fe_host}" "separated"
+}
+
+# ========================================================================
+# Storage Vault creation (for 存算分离 mode)
+# ========================================================================
+Create_Storage_Vault() {
+  local fe_ip=$1
+
+  if [ "${storage_vault_type}" == "S3" ] && [ -n "${s3_endpoint}" ]; then
+    echo "${CMSG}Creating S3 Storage Vault...${CEND}"
+    mysql -uroot -P${fe_query_port} -h${fe_ip} << EOF
+CREATE STORAGE VAULT IF NOT EXISTS s3_vault
+    PROPERTIES (
+    "type"="S3",
+    "s3.endpoint"="${s3_endpoint}",
+    "s3.access_key" = "${s3_access_key}",
+    "s3.secret_key" = "${s3_secret_key}",
+    "s3.region" = "${s3_region}",
+    "s3.root.path" = "${s3_root_path}",
+    "s3.bucket" = "${s3_bucket}",
+    "provider" = "${s3_provider}");
+SET s3_vault AS DEFAULT STORAGE VAULT;
+EOF
+    if [ $? -eq 0 ]; then
+      echo "${CSUCCESS}S3 Storage Vault created and set as default!${CEND}"
+    else
+      echo "${CWARNING}Failed to create S3 Storage Vault. Please configure manually.${CEND}"
+    fi
+
+  elif [ "${storage_vault_type}" == "HDFS" ] && [ -n "${hdfs_defaultfs}" ]; then
+    echo "${CMSG}Creating HDFS Storage Vault...${CEND}"
+    mysql -uroot -P${fe_query_port} -h${fe_ip} << EOF
+CREATE STORAGE VAULT IF NOT EXISTS hdfs_vault
+    PROPERTIES (
+    "type"="hdfs",
+    "fs.defaultFS"="${hdfs_defaultfs}");
+SET hdfs_vault AS DEFAULT STORAGE VAULT;
+EOF
+    if [ $? -eq 0 ]; then
+      echo "${CSUCCESS}HDFS Storage Vault created and set as default!${CEND}"
+    else
+      echo "${CWARNING}Failed to create HDFS Storage Vault. Please configure manually.${CEND}"
+    fi
+  else
+    echo "${CWARNING}Storage Vault not configured. Please create one manually:${CEND}"
+    echo "  mysql -uroot -P${fe_query_port} -h${fe_ip}"
+    echo '  CREATE STORAGE VAULT IF NOT EXISTS my_vault PROPERTIES ("type"="S3", ...);'
+    echo '  SET my_vault AS DEFAULT STORAGE VAULT;'
+  fi
+}
+
+# ========================================================================
+# Common helper functions
+# ========================================================================
+Wait_FE_Ready() {
+  local fe_host=$1
+  echo "${CMSG}Waiting for FE Master to be ready...${CEND}"
+  local retry=0
+  while [ ${retry} -lt 30 ]; do
+    if mysql -uroot -P${fe_query_port} -h${fe_host} -e "show frontends" > /dev/null 2>&1; then
+      echo "${CSUCCESS}FE Master is ready!${CEND}"
+      return 0
+    fi
+    sleep 5
+    retry=$((retry + 1))
+  done
+  echo "${CFAILURE}FE Master failed to start within timeout!${CEND}"
+  return 1
+}
+
+Remote_Deploy_FE() {
+  local host=$1
+  local doris_ver=$2
+  local helper_node=$3
+  local local_ip=$(hostname -I | awk '{print $1}')
+
+  if [ "${host}" == "${local_ip}" ] || [ "${host}" == "127.0.0.1" ] || [ "${host}" == "localhost" ]; then
+    Install_FE "${doris_ver}"
+    Start_FE "${helper_node}"
+  else
+    local ssh_opts="-o StrictHostKeyChecking=no -p ${ssh_port}"
+    [ -n "${ssh_key_file}" ] && ssh_opts="${ssh_opts} -i ${ssh_key_file}"
+    local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
+
+    echo "${CMSG}  Copying package to ${host}...${CEND}"
+    ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"
+    scp ${ssh_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/
+
+    local extra_args=""
+    [ -n "${helper_node}" ] && extra_args="--helper '${helper_node}'"
+
+    echo "${CMSG}  Installing FE on ${host}...${CEND}"
+    ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --fe_only --doris_ver ${doris_ver} ${extra_args} --quiet"
+  fi
+}
+
+Remote_Deploy_BE() {
+  local host=$1
+  local doris_ver=$2
+  local local_ip=$(hostname -I | awk '{print $1}')
+
+  if [ "${host}" == "${local_ip}" ] || [ "${host}" == "127.0.0.1" ] || [ "${host}" == "localhost" ]; then
+    Install_BE "${doris_ver}"
+    Start_BE
+  else
+    local ssh_opts="-o StrictHostKeyChecking=no -p ${ssh_port}"
+    [ -n "${ssh_key_file}" ] && ssh_opts="${ssh_opts} -i ${ssh_key_file}"
+    local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
+
+    echo "${CMSG}  Copying package to ${host}...${CEND}"
+    ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"
+    scp ${ssh_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/
+
+    echo "${CMSG}  Installing BE on ${host}...${CEND}"
+    ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --be_only --doris_ver ${doris_ver} --quiet"
+  fi
+}
+
+Remote_Deploy_MS() {
+  local host=$1
+  local doris_ver=$2
+  local local_ip=$(hostname -I | awk '{print $1}')
+
+  if [ "${host}" == "${local_ip}" ] || [ "${host}" == "127.0.0.1" ] || [ "${host}" == "localhost" ]; then
+    Install_MS "${doris_ver}"
+    Start_MS
+  else
+    local ssh_opts="-o StrictHostKeyChecking=no -p ${ssh_port}"
+    [ -n "${ssh_key_file}" ] && ssh_opts="${ssh_opts} -i ${ssh_key_file}"
+    local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
+
+    echo "${CMSG}  Copying package to ${host}...${CEND}"
+    ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"
+    scp ${ssh_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/
+
+    echo "${CMSG}  Installing MS on ${host}...${CEND}"
+    ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --ms_only --doris_ver ${doris_ver} --quiet"
+  fi
+}
+
+Verify_Cluster() {
+  local fe_ip=$1
+
+  echo "${CMSG}Checking FE status...${CEND}"
+  mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show frontends\G"
+
+  echo ""
+  echo "${CMSG}Checking BE status...${CEND}"
+  mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show backends\G"
+
+  # Simple write/read test
+  echo ""
+  echo "${CMSG}Running cluster validation test...${CEND}"
+  mysql -uroot -P${fe_query_port} -h${fe_ip} << EOF
+CREATE DATABASE IF NOT EXISTS doris_test;
+USE doris_test;
+CREATE TABLE IF NOT EXISTS test_table (
+    id INT,
+    name VARCHAR(50),
+    ts DATETIME
+) DISTRIBUTED BY HASH(id) BUCKETS 3
+PROPERTIES ("replication_num" = "1");
+INSERT INTO test_table VALUES (1, 'doris_test', NOW());
+SELECT * FROM test_table;
+DROP TABLE test_table;
+DROP DATABASE doris_test;
+EOF
+
+  if [ $? -eq 0 ]; then
+    echo "${CSUCCESS}Cluster validation passed!${CEND}"
+  else
+    echo "${CFAILURE}Cluster validation failed! Please check cluster status.${CEND}"
+    return 1
+  fi
+}
+
+Print_Cluster_Summary() {
+  local fe_ip=$1
+  local mode=$2
+
+  echo ""
+  echo "${CSUCCESS}============================================${CEND}"
+  echo "${CSUCCESS}  Doris Cluster Deployment Completed!${CEND}"
+  echo "${CSUCCESS}  Mode: ${mode}${CEND}"
+  echo "${CSUCCESS}============================================${CEND}"
+  echo ""
+  echo "  FE Master:  ${fe_ip}:${fe_query_port}"
+  echo "  FE Web UI:  http://${fe_ip}:${fe_http_port}"
+  echo "  Connect:    mysql -uroot -P${fe_query_port} -h${fe_ip}"
+  if [ "${mode}" == "separated" ]; then
+    echo ""
+    echo "  存算分离 components:"
+    echo "    FDB cluster: ${fdb_cluster:-N/A}"
+    echo "    MS nodes:    ${ms_nodes}"
+    echo "    Storage:     ${storage_vault_type}"
+  fi
+  echo ""
+}
+
+Show_Cluster_Status() {
+  local fe_ip=${1:-$(hostname -I | awk '{print $1}')}
+
+  echo "${CMSG}============================================${CEND}"
+  echo "${CMSG}  Doris Cluster Status${CEND}"
+  echo "${CMSG}============================================${CEND}"
+
+  # Local process status
+  echo ""
+  echo "${CMSG}Local Process Status:${CEND}"
+  Check_FE_Status 2>/dev/null
+  Check_BE_Status 2>/dev/null
+  if type Check_MS_Status &>/dev/null; then
+    Check_MS_Status 2>/dev/null
+  fi
+
+  echo ""
+  echo "${CMSG}FE Nodes:${CEND}"
+  mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show frontends" 2>/dev/null
+  if [ $? -ne 0 ]; then
+    echo "${CFAILURE}Cannot connect to FE at ${fe_ip}:${fe_query_port}${CEND}"
+    return 1
+  fi
+
+  echo ""
+  echo "${CMSG}BE Nodes:${CEND}"
+  mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show backends" 2>/dev/null
+
+  echo ""
+  echo "${CMSG}Cluster Version:${CEND}"
+  mysql -uroot -P${fe_query_port} -h${fe_ip} -e "select version()" 2>/dev/null
+
+  # Show Storage Vault info if in separated mode
+  if [ "${deploy_mode}" == "separated" ]; then
+    echo ""
+    echo "${CMSG}Storage Vaults:${CEND}"
+    mysql -uroot -P${fe_query_port} -h${fe_ip} -e "SHOW STORAGE VAULTS" 2>/dev/null
+  fi
+}

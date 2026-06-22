@@ -1,0 +1,19 @@
+[Unit]
+Description=Apache Doris FE (Frontend)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=@RUN_USER@
+Group=@RUN_GROUP@
+LimitNOFILE=65535
+LimitNPROC=65535
+ExecStart=@FE_INSTALL_DIR@/bin/start_fe.sh --daemon
+ExecStop=@FE_INSTALL_DIR@/bin/stop_fe.sh
+Restart=on-failure
+RestartSec=10
+PIDFile=@FE_INSTALL_DIR@/bin/fe.pid
+
+[Install]
+WantedBy=multi-user.target

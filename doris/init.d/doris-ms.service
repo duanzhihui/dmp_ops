@@ -1,0 +1,18 @@
+[Unit]
+Description=Apache Doris Meta Service
+After=network.target foundationdb.service
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=@RUN_USER@
+Group=@RUN_GROUP@
+LimitNOFILE=65535
+LimitNPROC=65535
+ExecStart=@MS_INSTALL_DIR@/bin/start.sh --daemon
+ExecStop=@MS_INSTALL_DIR@/bin/stop.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

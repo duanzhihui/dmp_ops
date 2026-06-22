@@ -1,0 +1,15 @@
+# Apache Doris versions
+# Supported versions: 2.1.x, 3.0.x, 4.1.x
+# Package format: apache-doris-<ver>-bin-<arch>.tar.gz (unified for all versions)
+# Package contains: fe/, be/, ms/ (ms only in 3.x+)
+
+doris_211_ver=2.1.11
+doris_308_ver=3.0.8
+doris_411_ver=4.1.1
+
+# JDK version (Doris 2.x requires JDK 8; Doris 3.x+ requires JDK 17)
+jdk8_ver=8u392
+jdk17_ver=17.0.9
+
+# FoundationDB version (required for separating storage-compute mode, 3.x+)
+fdb_ver=7.1.38
