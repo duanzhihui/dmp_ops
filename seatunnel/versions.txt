@@ -1,0 +1,15 @@
+# SeaTunnel Version Configuration
+# Author: OneinStack
+# Project: https://github.com/oneinstack/oneinstack
+
+# SeaTunnel 版本
+seatunnel_ver=2.3.13
+
+# Java 版本要求（8 或 11）
+java_required_ver=11
+
+# 最低 Java 版本
+java_min_ver=8
+
+# 最高支持 Java 版本
+java_max_ver=11

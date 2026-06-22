@@ -1,0 +1,32 @@
+[Unit]
+Description=Apache SeaTunnel Engine (Hybrid Mode)
+Documentation=https://seatunnel.apache.org/
+After=network.target
+
+[Service]
+Type=forking
+User=seatunnel
+Group=seatunnel
+
+Environment=SEATUNNEL_HOME=/opt/seatunnel
+Environment=JAVA_HOME=/usr/lib/jvm/java
+
+ExecStartPre=/bin/mkdir -p /opt/seatunnel/logs
+ExecStartPre=/bin/mkdir -p /var/run/seatunnel
+ExecStartPre=/bin/chown -R seatunnel:seatunnel /var/run/seatunnel
+
+ExecStart=/opt/seatunnel/bin/seatunnel-cluster.sh -d
+ExecStop=/opt/seatunnel/bin/stop-seatunnel-cluster.sh
+
+Restart=on-failure
+RestartSec=10
+
+LimitNOFILE=1000000
+LimitNPROC=1000000
+LimitCORE=infinity
+
+TimeoutStartSec=180
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

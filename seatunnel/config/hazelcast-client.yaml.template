@@ -1,0 +1,7 @@
+hazelcast-client:
+  cluster-name: ${CLUSTER_NAME}
+  properties:
+    hazelcast.logging.type: log4j2
+  network:
+    cluster-members:
+${CLIENT_MEMBER_LIST}

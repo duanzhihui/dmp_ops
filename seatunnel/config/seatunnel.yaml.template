@@ -1,0 +1,18 @@
+seatunnel:
+  engine:
+    backup-count: ${BACKUP_COUNT}
+    queue-type: blockingqueue
+    slot-service:
+      dynamic-slot: true
+    checkpoint:
+      interval: ${CHECKPOINT_INTERVAL}
+      timeout: ${CHECKPOINT_TIMEOUT}
+      storage:
+        type: ${CHECKPOINT_STORAGE_TYPE}
+        max-retained: ${CHECKPOINT_MAX_RETAINED}
+        plugin-config:
+          namespace: ${CHECKPOINT_NAMESPACE}
+    history-job-expire-minutes: ${HISTORY_JOB_EXPIRE_MINUTES}
+    classloader-cache-mode: true
+    # Valid values: WAIT (wait for resources) / REJECT (reject job, default)
+    job-schedule-strategy: ${JOB_SCHEDULE_STRATEGY}
