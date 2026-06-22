@@ -1,0 +1,28 @@
+[Unit]
+Description=Apache ZooKeeper Server
+Documentation=https://zookeeper.apache.org/doc/current/
+After=network.target
+
+[Service]
+Type=forking
+User=zookeeper
+Group=zookeeper
+
+Environment="JAVA_HOME=/usr/local/jdk"
+Environment="ZK_HOME=/opt/zookeeper"
+Environment="ZOOCFGDIR=/opt/zookeeper/conf"
+
+ExecStart=/opt/zookeeper/bin/zkServer.sh start
+ExecStop=/opt/zookeeper/bin/zkServer.sh stop
+ExecReload=/opt/zookeeper/bin/zkServer.sh restart
+
+PIDFile=/data/zookeeper/zookeeper_server.pid
+
+Restart=on-failure
+RestartSec=10
+
+LimitNOFILE=65536
+LimitNPROC=65536
+
+[Install]
+WantedBy=multi-user.target

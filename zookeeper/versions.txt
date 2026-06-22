@@ -1,0 +1,11 @@
+# ZooKeeper 版本号清单
+# 项目: oneinstack/zookeeper
+# 说明: 与 options.conf 分离，便于独立更新
+
+# ZooKeeper 版本
+zk39_ver=3.9.5
+zk38_ver=3.8.6
+zk37_ver=3.7.2
+
+# 默认安装版本
+zk_ver=3.9.5
