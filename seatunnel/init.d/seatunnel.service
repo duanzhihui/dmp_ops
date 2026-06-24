@@ -12,8 +12,8 @@ Environment=SEATUNNEL_HOME=/opt/seatunnel
 Environment=JAVA_HOME=/usr/lib/jvm/java
 
 ExecStartPre=/bin/mkdir -p /opt/seatunnel/logs
-ExecStartPre=/bin/mkdir -p /var/run/seatunnel
-ExecStartPre=/bin/chown -R seatunnel:seatunnel /var/run/seatunnel
+ExecStartPre=+/bin/mkdir -p /var/run/seatunnel
+ExecStartPre=+/bin/chown -R seatunnel:seatunnel /var/run/seatunnel
 
 ExecStart=/opt/seatunnel/bin/seatunnel-cluster.sh -d
 ExecStop=/opt/seatunnel/bin/stop-seatunnel-cluster.sh
