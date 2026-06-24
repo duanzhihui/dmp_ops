@@ -28,6 +28,18 @@ if [[ "${Platform}" =~ ^centos$|^rhel$|^almalinux$|^rocky$|^fedora$|^amzn$|^ol$|
       sed -i "s@centos/\$releasever@centos-vault/6.10@g" /etc/yum.repos.d/CentOS-Base.repo
       sed -i 's@centos/RPM-GPG@centos-vault/RPM-GPG@g' /etc/yum.repos.d/CentOS-Base.repo
       [ -e /etc/yum.repos.d/epel.repo ] && rm -f /etc/yum.repos.d/epel.repo
+    elif [ "${VERSION_MAIN_ID}" == '7' ]; then
+      if [ -e /etc/yum.repos.d/CentOS-Base.repo ]; then
+        sed -i 's@^mirrorlist=@#mirrorlist=@g' /etc/yum.repos.d/CentOS-Base.repo
+        sed -i 's@^#baseurl=http://mirror.centos.org@baseurl=https://mirrors.tuna.tsinghua.edu.cn@g' /etc/yum.repos.d/CentOS-Base.repo
+        sed -i 's@centos/$releasever@centos-vault/7.9.2009@g' /etc/yum.repos.d/CentOS-Base.repo
+      fi
+      if [ -e /etc/yum.repos.d/epel.repo ]; then
+        sed -i 's@^mirrorlist=@#mirrorlist=@g' /etc/yum.repos.d/epel.repo
+        sed -i 's@^#baseurl=http://download.fedoraproject.org@baseurl=https://archives.fedoraproject.org@g' /etc/yum.repos.d/epel.repo
+        sed -i 's@pub/epel@pub/archive/epel@g' /etc/yum.repos.d/epel.repo
+      fi
+      yum clean all
     fi
   elif [[ "${Platform}" =~ ^fedora$ ]]; then
     Fedora_ver=${VERSION_MAIN_ID}
