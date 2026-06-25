@@ -112,6 +112,7 @@ Install_BE_Service() {
   sed -i "s|@RUN_USER@|${run_user}|g" /lib/systemd/system/doris-be.service
   sed -i "s|@RUN_GROUP@|${run_group}|g" /lib/systemd/system/doris-be.service
   sed -i "s|@BE_INSTALL_DIR@|${be_install_dir}|g" /lib/systemd/system/doris-be.service
+  sed -i "s|@JAVA_HOME@|${JAVA_HOME}|g" /lib/systemd/system/doris-be.service
   systemctl daemon-reload
   systemctl enable doris-be
   echo "${CSUCCESS}Doris BE systemd service installed.${CEND}"
@@ -127,7 +128,7 @@ Start_BE() {
     swapoff -a
   fi
 
-  su - ${run_user} -s /bin/bash -c "${be_install_dir}/bin/start_be.sh --daemon"
+  su - ${run_user} -s /bin/bash -c "export JAVA_HOME=${JAVA_HOME} && ${be_install_dir}/bin/start_be.sh --daemon"
 
   # Wait and check status
   sleep 5

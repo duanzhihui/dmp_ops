@@ -172,6 +172,7 @@ Install_FE_Service() {
   sed -i "s|@RUN_USER@|${run_user}|g" /lib/systemd/system/doris-fe.service
   sed -i "s|@RUN_GROUP@|${run_group}|g" /lib/systemd/system/doris-fe.service
   sed -i "s|@FE_INSTALL_DIR@|${fe_install_dir}|g" /lib/systemd/system/doris-fe.service
+  sed -i "s|@JAVA_HOME@|${JAVA_HOME}|g" /lib/systemd/system/doris-fe.service
   systemctl daemon-reload
   systemctl enable doris-fe
   echo "${CSUCCESS}Doris FE systemd service installed.${CEND}"
@@ -182,9 +183,9 @@ Start_FE() {
 
   echo "${CMSG}Starting Doris FE...${CEND}"
   if [ -n "${helper_node}" ]; then
-    su - ${run_user} -s /bin/bash -c "${fe_install_dir}/bin/start_fe.sh --helper ${helper_node} --daemon"
+    su - ${run_user} -s /bin/bash -c "export JAVA_HOME=${JAVA_HOME} && ${fe_install_dir}/bin/start_fe.sh --helper ${helper_node} --daemon"
   else
-    su - ${run_user} -s /bin/bash -c "${fe_install_dir}/bin/start_fe.sh --daemon"
+    su - ${run_user} -s /bin/bash -c "export JAVA_HOME=${JAVA_HOME} && ${fe_install_dir}/bin/start_fe.sh --daemon"
   fi
 
   # Wait and check status

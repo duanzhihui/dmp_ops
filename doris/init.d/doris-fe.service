@@ -7,13 +7,17 @@ Wants=network-online.target
 Type=forking
 User=@RUN_USER@
 Group=@RUN_GROUP@
+Environment="JAVA_HOME=@JAVA_HOME@"
 LimitNOFILE=65535
 LimitNPROC=65535
 ExecStart=@FE_INSTALL_DIR@/bin/start_fe.sh --daemon
-ExecStop=@FE_INSTALL_DIR@/bin/stop_fe.sh
+ExecStop=-@FE_INSTALL_DIR@/bin/stop_fe.sh
 Restart=on-failure
 RestartSec=10
+TimeoutStartSec=120
 PIDFile=@FE_INSTALL_DIR@/bin/fe.pid
+StartLimitBurst=5
+StartLimitIntervalSec=120
 
 [Install]
 WantedBy=multi-user.target

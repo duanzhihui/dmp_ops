@@ -7,15 +7,19 @@ Wants=network-online.target
 Type=forking
 User=@RUN_USER@
 Group=@RUN_GROUP@
+Environment="JAVA_HOME=@JAVA_HOME@"
 LimitNOFILE=65535
 LimitNPROC=65535
 LimitCORE=infinity
 ExecStartPre=/sbin/swapoff -a
 ExecStart=@BE_INSTALL_DIR@/bin/start_be.sh --daemon
-ExecStop=@BE_INSTALL_DIR@/bin/stop_be.sh
+ExecStop=-@BE_INSTALL_DIR@/bin/stop_be.sh
 Restart=on-failure
 RestartSec=10
+TimeoutStartSec=120
 PIDFile=@BE_INSTALL_DIR@/bin/be.pid
+StartLimitBurst=5
+StartLimitIntervalSec=120
 
 [Install]
 WantedBy=multi-user.target

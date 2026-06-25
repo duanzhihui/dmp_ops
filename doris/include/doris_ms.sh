@@ -109,6 +109,7 @@ Install_MS_Service() {
   sed -i "s|@RUN_USER@|${run_user}|g" /lib/systemd/system/doris-ms.service
   sed -i "s|@RUN_GROUP@|${run_group}|g" /lib/systemd/system/doris-ms.service
   sed -i "s|@MS_INSTALL_DIR@|${ms_install_dir}|g" /lib/systemd/system/doris-ms.service
+  sed -i "s|@JAVA_HOME@|${JAVA_HOME}|g" /lib/systemd/system/doris-ms.service
   systemctl daemon-reload
   systemctl enable doris-ms
   echo "${CSUCCESS}Doris Meta Service systemd service installed.${CEND}"
