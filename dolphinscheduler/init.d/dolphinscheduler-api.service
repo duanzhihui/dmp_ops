@@ -11,7 +11,9 @@ Environment="JAVA_HOME=@JAVA_HOME@"
 ExecStart=@INSTALL_DIR@/bin/dolphinscheduler-daemon.sh start api-server
 ExecStop=@INSTALL_DIR@/bin/dolphinscheduler-daemon.sh stop api-server
 Restart=on-failure
-RestartSec=10
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
 LimitNOFILE=65535
 LimitNPROC=65535
 

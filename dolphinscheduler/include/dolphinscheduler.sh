@@ -365,7 +365,9 @@ Environment="JAVA_HOME=${JAVA_HOME}"
 ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start standalone-server
 ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop standalone-server
 Restart=on-failure
-RestartSec=10
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
 LimitNOFILE=65535
 LimitNPROC=65535
 
@@ -397,7 +399,9 @@ Environment="JAVA_HOME=${JAVA_HOME}"
 ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start master-server
 ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop master-server
 Restart=on-failure
-RestartSec=10
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
 LimitNOFILE=65535
 LimitNPROC=65535
 
@@ -420,7 +424,9 @@ Environment="JAVA_HOME=${JAVA_HOME}"
 ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start worker-server
 ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop worker-server
 Restart=on-failure
-RestartSec=10
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
 LimitNOFILE=65535
 LimitNPROC=65535
 
@@ -443,7 +449,9 @@ Environment="JAVA_HOME=${JAVA_HOME}"
 ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start api-server
 ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop api-server
 Restart=on-failure
-RestartSec=10
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
 LimitNOFILE=65535
 LimitNPROC=65535
 
@@ -466,7 +474,9 @@ Environment="JAVA_HOME=${JAVA_HOME}"
 ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start alert-server
 ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop alert-server
 Restart=on-failure
-RestartSec=10
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
 LimitNOFILE=65535
 LimitNPROC=65535
 
