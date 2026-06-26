@@ -211,10 +211,10 @@ Configure_Application_Yaml() {
           Configure_Server_Port "${yaml_file}" "${api_port}"
           ;;
         master-server)
-          Configure_Server_Port "${yaml_file}" "${master_port}"
+          Configure_Master_Server_Ports "${yaml_file}" "${master_rpc_port}" "${master_web_port}"
           ;;
         worker-server)
-          Configure_Server_Port "${yaml_file}" "${worker_port}"
+          Configure_Worker_Server_Ports "${yaml_file}" "${worker_rpc_port}" "${worker_web_port}"
           ;;
         alert-server)
           Configure_Alert_Server_Ports "${yaml_file}" "${alert_rpc_port}" "${alert_web_port}"
@@ -222,6 +222,84 @@ Configure_Application_Yaml() {
       esac
     fi
   done
+}
+
+# Configure Master Server ports (RPC port and Web port)
+# Master Server has two services that need different ports:
+#   - MasterRpcServer: uses master.listen-port for internal RPC communication
+#   - Jetty Web Server: uses server.port for actuator/metrics endpoints
+Configure_Master_Server_Ports() {
+  local yaml_file=$1
+  local rpc_port=$2
+  local web_port=$3
+  
+  [ -z "${rpc_port}" ] && rpc_port=5678
+  [ -z "${web_port}" ] && web_port=5679
+  
+  echo "${CMSG}Configuring Master Server ports: RPC=${rpc_port}, Web=${web_port}...${CEND}"
+  
+  # Configure server.port (Jetty Web Server port)
+  awk -v port="${web_port}" '
+    BEGIN { in_server=0; done=0 }
+    /^---/ { in_server=0 }
+    /^server:/ { in_server=1 }
+    in_server && /^[[:space:]]+port:/ && !done {
+      sub(/port:.*/, "port: " port)
+      done=1
+    }
+    { print }
+  ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
+  
+  # Configure master.listen-port (MasterRpcServer port)
+  awk -v port="${rpc_port}" '
+    BEGIN { in_master=0; done=0 }
+    /^---/ { in_master=0 }
+    /^master:/ { in_master=1 }
+    in_master && /^[[:space:]]+listen-port:/ && !done {
+      sub(/listen-port:.*/, "listen-port: " port)
+      done=1
+    }
+    { print }
+  ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
+}
+
+# Configure Worker Server ports (RPC port and Web port)
+# Worker Server has two services that need different ports:
+#   - WorkerRpcServer: uses worker.listen-port for internal RPC communication
+#   - Jetty Web Server: uses server.port for actuator/metrics endpoints
+Configure_Worker_Server_Ports() {
+  local yaml_file=$1
+  local rpc_port=$2
+  local web_port=$3
+  
+  [ -z "${rpc_port}" ] && rpc_port=1234
+  [ -z "${web_port}" ] && web_port=1235
+  
+  echo "${CMSG}Configuring Worker Server ports: RPC=${rpc_port}, Web=${web_port}...${CEND}"
+  
+  # Configure server.port (Jetty Web Server port)
+  awk -v port="${web_port}" '
+    BEGIN { in_server=0; done=0 }
+    /^---/ { in_server=0 }
+    /^server:/ { in_server=1 }
+    in_server && /^[[:space:]]+port:/ && !done {
+      sub(/port:.*/, "port: " port)
+      done=1
+    }
+    { print }
+  ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
+  
+  # Configure worker.listen-port (WorkerRpcServer port)
+  awk -v port="${rpc_port}" '
+    BEGIN { in_worker=0; done=0 }
+    /^---/ { in_worker=0 }
+    /^worker:/ { in_worker=1 }
+    in_worker && /^[[:space:]]+listen-port:/ && !done {
+      sub(/listen-port:.*/, "listen-port: " port)
+      done=1
+    }
+    { print }
+  ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
 }
 
 # Configure Alert Server ports (RPC port and Web port)
