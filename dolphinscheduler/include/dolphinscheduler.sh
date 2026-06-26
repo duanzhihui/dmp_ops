@@ -217,11 +217,51 @@ Configure_Application_Yaml() {
           Configure_Server_Port "${yaml_file}" "${worker_port}"
           ;;
         alert-server)
-          Configure_Server_Port "${yaml_file}" "${alert_port}"
+          Configure_Alert_Server_Ports "${yaml_file}" "${alert_rpc_port}" "${alert_web_port}"
           ;;
       esac
     fi
   done
+}
+
+# Configure Alert Server ports (RPC port and Web port)
+# Alert Server has two services that need different ports:
+#   - AlertRpcServer: uses alert.port for internal RPC communication
+#   - Jetty Web Server: uses server.port for actuator/metrics endpoints
+Configure_Alert_Server_Ports() {
+  local yaml_file=$1
+  local rpc_port=$2
+  local web_port=$3
+  
+  [ -z "${rpc_port}" ] && rpc_port=50052
+  [ -z "${web_port}" ] && web_port=50053
+  
+  echo "${CMSG}Configuring Alert Server ports: RPC=${rpc_port}, Web=${web_port}...${CEND}"
+  
+  # Configure server.port (Jetty Web Server port)
+  awk -v port="${web_port}" '
+    BEGIN { in_server=0; done=0 }
+    /^---/ { in_server=0 }
+    /^server:/ { in_server=1 }
+    in_server && /^[[:space:]]+port:/ && !done {
+      sub(/port:.*/, "port: " port)
+      done=1
+    }
+    { print }
+  ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
+  
+  # Configure alert.port (AlertRpcServer port)
+  # This is under the 'alert:' section in the first YAML document
+  awk -v port="${rpc_port}" '
+    BEGIN { in_alert=0; done=0 }
+    /^---/ { in_alert=0 }
+    /^alert:/ { in_alert=1 }
+    in_alert && /^[[:space:]]+port:/ && !done {
+      sub(/port:.*/, "port: " port)
+      done=1
+    }
+    { print }
+  ' "${yaml_file}" > "${yaml_file}.tmp" && mv "${yaml_file}.tmp" "${yaml_file}"
 }
 
 # Configure server port in application.yaml
