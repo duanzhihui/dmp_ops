@@ -129,14 +129,47 @@ installDepsUbuntu() {
   [[ "${Ubuntu_ver}" =~ ^22$ ]] && apt-get -y --allow-downgrades install libicu70=70.1-2 libglib2.0-0=2.72.1-1 libxml2-dev
 
   # critical security updates
-  grep security /etc/apt/sources.list > /tmp/security.sources.list
-  apt-get -y upgrade -o Dir::Etc::SourceList=/tmp/security.sources.list
+  # Ubuntu 24.04+ 默认使用 deb822 格式 (/etc/apt/sources.list.d/ubuntu.sources)，
+  # /etc/apt/sources.list 可能为空，直接 grep 会得到空源列表，这里加判断避免异常
+  if grep -q security /etc/apt/sources.list 2>/dev/null; then
+    grep security /etc/apt/sources.list > /tmp/security.sources.list
+    apt-get -y upgrade -o Dir::Etc::SourceList=/tmp/security.sources.list
+  fi
 
-  # Install needed packages
-  pkgList="libperl-dev pkg-config libsodium-dev libbz2-dev libxslt-dev libjpeg-dev libxml2-dev libxpm-dev libfreetype-dev debian-keyring debian-archive-keyring build-essential gcc g++ make cmake autoconf libjpeg8 libjpeg8-dev libpng-dev libpng12-0 libpng12-dev libpng3 libxml2 libxml2-dev zlib1g zlib1g-dev libc6 libc6-dev libc-client2007e-dev libglib2.0-0 libglib2.0-dev bzip2 libzip-dev libbz2-1.0 libncurses5 libncurses5-dev libaio1 libaio-dev numactl libreadline-dev curl libcurl3-gnutls libcurl4-gnutls-dev libcurl4-openssl-dev e2fsprogs libkrb5-3 libkrb5-dev libltdl-dev libidn11 libidn11-dev openssl net-tools libssl-dev libtool libevent-dev re2c libsasl2-dev libxslt1-dev libicu-dev libsqlite3-dev libcloog-ppl1 bison patch vim zip unzip tmux htop bc dc expect libexpat1-dev rsyslog libonig-dev libtirpc-dev libnss3 rsync git lsof lrzsz chrony psmisc wget sysv-rc apt-transport-https ca-certificates software-properties-common gnupg ufw libiconv-dev libfreetype6-dev libexif-dev gettext-dev libgmp-dev"
+  # 优先确保编译工具链安装成功（缺失会导致 icu/jemalloc 等所有源码编译连锁失败）
+  apt-get --no-install-recommends -y install build-essential gcc g++ make cmake autoconf bzip2
+
+  # 通用依赖包（各 Ubuntu 版本通用）
+  pkgList="libperl-dev pkg-config libsodium-dev libbz2-dev libxslt-dev libjpeg-dev libxml2-dev libxpm-dev libfreetype-dev debian-keyring debian-archive-keyring build-essential gcc g++ make cmake autoconf libpng-dev libxml2 libxml2-dev zlib1g zlib1g-dev libc6 libc6-dev libglib2.0-0 libglib2.0-dev bzip2 libzip-dev libbz2-1.0 libaio-dev numactl libreadline-dev curl libcurl4-openssl-dev e2fsprogs libkrb5-3 libkrb5-dev libltdl-dev openssl net-tools libssl-dev libtool libevent-dev re2c libsasl2-dev libxslt1-dev libicu-dev libsqlite3-dev bison patch vim zip unzip tmux htop bc dc expect libexpat1-dev rsyslog libonig-dev libtirpc-dev libnss3 rsync git lsof lrzsz chrony psmisc wget sysv-rc apt-transport-https ca-certificates software-properties-common gnupg ufw libiconv-dev libfreetype6-dev libexif-dev gettext libgmp-dev"
+
+  # 版本相关依赖包（24.04 起大量库因 64 位 time_t 迁移被重命名，旧包名已移除）
+  case "${Ubuntu_ver}" in
+    24|25|26)
+      verPkgList="libjpeg-turbo8 libjpeg-turbo8-dev libaio1t64 libncurses-dev libncurses6 libidn12 libidn-dev libcurl3t64-gnutls libcurl4-gnutls-dev"
+      ;;
+    *)
+      verPkgList="libjpeg8 libjpeg8-dev libpng12-0 libpng12-dev libpng3 libc-client2007e-dev libaio1 libncurses5 libncurses5-dev libidn11 libidn11-dev libcloog-ppl1 libcurl3-gnutls libcurl4-gnutls-dev"
+      ;;
+  esac
+
   export DEBIAN_FRONTEND=noninteractive
-  for Package in ${pkgList}; do
+  for Package in ${pkgList} ${verPkgList}; do
     apt-get --no-install-recommends -y install ${Package}
+  done
+
+  # Ubuntu 24.04 将 libaio1 更名为 libaio1t64 且无过渡包，但 MySQL/Percona 仍链接 libaio.so.1，补软链
+  libaio_t64=$(ldconfig -p 2>/dev/null | awk '/libaio\.so\.1t64/{print $NF; exit}')
+  if [ -n "${libaio_t64}" ] && [ ! -e "${libaio_t64%t64}" ]; then
+    ln -s "${libaio_t64}" "${libaio_t64%t64}"
+    ldconfig
+  fi
+
+  # 校验编译工具链是否就绪，缺失则明确报错退出（避免后续 icu/jemalloc 出现难以定位的连锁失败）
+  for tool in gcc g++ make bzip2; do
+    if ! command -v ${tool} > /dev/null 2>&1; then
+      echo "${CFAILURE}Essential build tool '${tool}' is missing after apt install. Please check your apt sources / network, then re-run.${CEND}"
+      kill -9 $$; exit 1;
+    fi
   done
 }
 
