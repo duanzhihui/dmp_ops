@@ -136,8 +136,9 @@ installDepsUbuntu() {
     apt-get -y upgrade -o Dir::Etc::SourceList=/tmp/security.sources.list
   fi
 
-  # 优先确保编译工具链安装成功（缺失会导致 icu/jemalloc 等所有源码编译连锁失败）
-  apt-get --no-install-recommends -y install build-essential gcc g++ make cmake autoconf bzip2
+  # 优先确保编译工具链及 nginx/php 早期必需的开发库安装成功
+  # （缺失会导致 icu/jemalloc/nginx 等源码编译连锁失败，如 zlib 缺失时 nginx gzip 模块报错）
+  apt-get --no-install-recommends -y install build-essential gcc g++ make cmake autoconf bzip2 zlib1g-dev libssl-dev
 
   # 通用依赖包（各 Ubuntu 版本通用）
   pkgList="libperl-dev pkg-config libsodium-dev libbz2-dev libxslt-dev libjpeg-dev libxml2-dev libxpm-dev libfreetype-dev debian-keyring debian-archive-keyring build-essential gcc g++ make cmake autoconf libpng-dev libxml2 libxml2-dev zlib1g zlib1g-dev libc6 libc6-dev libglib2.0-0 libglib2.0-dev bzip2 libzip-dev libbz2-1.0 libaio-dev numactl libreadline-dev curl libcurl4-openssl-dev e2fsprogs libkrb5-3 libkrb5-dev libltdl-dev openssl net-tools libssl-dev libtool libevent-dev re2c libsasl2-dev libxslt1-dev libicu-dev libsqlite3-dev bison patch vim zip unzip tmux htop bc dc expect libexpat1-dev rsyslog libonig-dev libtirpc-dev libnss3 rsync git lsof lrzsz chrony psmisc wget sysv-rc apt-transport-https ca-certificates software-properties-common gnupg ufw libiconv-dev libfreetype6-dev libexif-dev gettext libgmp-dev"
@@ -171,6 +172,15 @@ installDepsUbuntu() {
       kill -9 $$; exit 1;
     fi
   done
+
+  # 校验关键开发库头文件（zlib 缺失会导致 nginx 编译失败），缺失时再补装一次并报错退出
+  if [ ! -e /usr/include/zlib.h ]; then
+    apt-get -y install zlib1g-dev
+    if [ ! -e /usr/include/zlib.h ]; then
+      echo "${CFAILURE}zlib1g-dev is missing after apt install (maybe killed by OOM). Please free memory / add swap, then re-run.${CEND}"
+      kill -9 $$; exit 1;
+    fi
+  fi
 }
 
 installDepsBySrc() {
