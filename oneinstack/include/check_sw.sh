@@ -143,15 +143,13 @@ installDepsUbuntu() {
   # 通用依赖包（各 Ubuntu 版本通用）
   pkgList="libperl-dev pkg-config libsodium-dev libbz2-dev libxslt-dev libjpeg-dev libxml2-dev libxpm-dev libfreetype-dev debian-keyring debian-archive-keyring build-essential gcc g++ make cmake autoconf libpng-dev libxml2 libxml2-dev zlib1g zlib1g-dev libc6 libc6-dev libglib2.0-0 libglib2.0-dev bzip2 libzip-dev libbz2-1.0 libaio-dev numactl libreadline-dev curl libcurl4-openssl-dev e2fsprogs libkrb5-3 libkrb5-dev libltdl-dev openssl net-tools libssl-dev libtool libevent-dev re2c libsasl2-dev libxslt1-dev libicu-dev libsqlite3-dev bison patch vim zip unzip tmux htop bc dc expect libexpat1-dev rsyslog libonig-dev libtirpc-dev libnss3 rsync git lsof lrzsz chrony psmisc wget sysv-rc apt-transport-https ca-certificates software-properties-common gnupg ufw libiconv-dev libfreetype6-dev libexif-dev gettext libgmp-dev"
 
-  # 版本相关依赖包（24.04 起大量库因 64 位 time_t 迁移被重命名，旧包名已移除）
-  case "${Ubuntu_ver}" in
-    24|25|26)
-      verPkgList="libjpeg-turbo8 libjpeg-turbo8-dev libaio1t64 libncurses-dev libncurses6 libidn12 libidn-dev libcurl3t64-gnutls libcurl4-gnutls-dev"
-      ;;
-    *)
-      verPkgList="libjpeg8 libjpeg8-dev libpng12-0 libpng12-dev libpng3 libc-client2007e-dev libaio1 libncurses5 libncurses5-dev libidn11 libidn11-dev libcloog-ppl1 libcurl3-gnutls libcurl4-gnutls-dev"
-      ;;
-  esac
+  # 版本相关依赖包（24.04 起大量库因 64 位 time_t 迁移被重命名，旧包名已移除；t64 命名会被后续版本沿用）
+  # 用数值比较而非固定枚举，可自动适配 Ubuntu 24 / 25 / 26 及之后的版本
+  if [ ${Ubuntu_ver} -ge 24 >/dev/null 2>&1 ]; then
+    verPkgList="libjpeg-turbo8 libjpeg-turbo8-dev libaio1t64 libncurses-dev libncurses6 libidn12 libidn-dev libcurl3t64-gnutls libcurl4-gnutls-dev"
+  else
+    verPkgList="libjpeg8 libjpeg8-dev libpng12-0 libpng12-dev libpng3 libc-client2007e-dev libaio1 libncurses5 libncurses5-dev libidn11 libidn11-dev libcloog-ppl1 libcurl3-gnutls libcurl4-gnutls-dev"
+  fi
 
   export DEBIAN_FRONTEND=noninteractive
   for Package in ${pkgList} ${verPkgList}; do
@@ -185,7 +183,18 @@ installDepsUbuntu() {
 
 installDepsBySrc() {
   pushd ${oneinstack_dir}/src > /dev/null
-  if ! command -v icu-config > /dev/null 2>&1 || icu-config --version | grep '^3.' || [ "${Ubuntu_ver}" == "20" ]; then
+  # 是否需要从源码编译 ICU 的判断：
+  # - 新版 ICU (Ubuntu 24/25/26 的 libicu-dev) 不再提供 icu-config 命令，
+  #   若仍用 `! command -v icu-config` 判断会导致重复编译一份旧 ICU，浪费资源且易 OOM；
+  #   因此优先用 pkg-config 检测系统已安装的 ICU 开发库。
+  need_build_icu=0
+  if command -v icu-config > /dev/null 2>&1; then
+    icu-config --version | grep -q '^3\.' && need_build_icu=1
+  elif ! pkg-config --exists icu-uc 2>/dev/null; then
+    need_build_icu=1
+  fi
+  [ "${Ubuntu_ver}" == "20" ] && need_build_icu=1
+  if [ ${need_build_icu} -eq 1 ]; then
     tar xzf icu4c-${icu4c_ver}-src.tgz
     pushd icu/source > /dev/null
     ./configure --prefix=/usr/local

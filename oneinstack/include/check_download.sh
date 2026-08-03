@@ -10,7 +10,17 @@
 checkDownload() {
   pushd ${oneinstack_dir}/src > /dev/null
   # icu
-  if ! command -v icu-config >/dev/null 2>&1 || icu-config --version | grep '^3.' || [ "${Ubuntu_ver}" == "20" ]; then
+  # 与 check_sw.sh 的 installDepsBySrc 判断保持一致：
+  # 新版 ICU (Ubuntu 24/25/26 的 libicu-dev) 不再提供 icu-config，优先用 pkg-config 检测系统 ICU，
+  # 仅在系统无可用 ICU（或旧的 v3、或 Ubuntu 20）时才下载 icu4c 源码包。
+  need_build_icu=0
+  if command -v icu-config >/dev/null 2>&1; then
+    icu-config --version | grep -q '^3\.' && need_build_icu=1
+  elif ! pkg-config --exists icu-uc 2>/dev/null; then
+    need_build_icu=1
+  fi
+  [ "${Ubuntu_ver}" == "20" ] && need_build_icu=1
+  if [ ${need_build_icu} -eq 1 ]; then
     echo "Download icu..."
     src_url=${mirror_link}/oneinstack/src/icu4c-${icu4c_ver}-src.tgz && Download_src
   fi
