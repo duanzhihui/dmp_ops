@@ -156,12 +156,23 @@ installDepsUbuntu() {
     apt-get --no-install-recommends -y install ${Package}
   done
 
-  # Ubuntu 24.04 将 libaio1 更名为 libaio1t64 且无过渡包，但 MySQL/Percona 仍链接 libaio.so.1，补软链
-  libaio_t64=$(ldconfig -p 2>/dev/null | awk '/libaio\.so\.1t64/{print $NF; exit}')
-  if [ -n "${libaio_t64}" ] && [ ! -e "${libaio_t64%t64}" ]; then
-    ln -s "${libaio_t64}" "${libaio_t64%t64}"
-    ldconfig
-  fi
+  # Ubuntu 24.04+ 运行时兼容软链：
+  # 预编译二进制(如 MySQL/Percona 的 mysqld/mysql)仍链接旧 soname，需要补软链，否则运行时报
+  # "cannot open shared object file: libaio.so.1 / libncurses.so.5"。按文件是否存在建链，对各版本均安全。
+  compatLibDir="/usr/lib/$(uname -m)-linux-gnu"
+  # libaio: 24.04 因 t64 迁移更名为 libaio.so.1t64 且无过渡包
+  for d in "${compatLibDir}" /usr/lib "/lib/$(uname -m)-linux-gnu"; do
+    if [ -e "${d}/libaio.so.1t64" ] && [ ! -e "${d}/libaio.so.1" ]; then
+      ln -s "${d}/libaio.so.1t64" "${d}/libaio.so.1"
+    fi
+  done
+  # libncurses/libtinfo: 24.04 仅提供 .so.6，MySQL 客户端等仍找 .so.5
+  for lib in libncurses libncursesw libtinfo libtinfow; do
+    if [ -e "${compatLibDir}/${lib}.so.6" ] && [ ! -e "${compatLibDir}/${lib}.so.5" ]; then
+      ln -s "${compatLibDir}/${lib}.so.6" "${compatLibDir}/${lib}.so.5"
+    fi
+  done
+  ldconfig
 
   # 校验编译工具链是否就绪，缺失则明确报错退出（避免后续 icu/jemalloc 出现难以定位的连锁失败）
   for tool in gcc g++ make bzip2; do
