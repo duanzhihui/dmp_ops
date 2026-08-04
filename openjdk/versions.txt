@@ -1,0 +1,21 @@
+# OpenJDK 版本清单
+# 项目: dmp_ops/openjdk
+# 说明: 只固定 feature 版本；补丁版本留空时由 Adoptium API 自动获取最新 GA
+
+# ===== feature 版本(用于包名与目录名推导) =====
+jdk8_ver=8
+jdk11_ver=11
+jdk17_ver=17
+jdk18_ver=18
+jdk21_ver=21
+
+# ===== 锁定补丁版本(仅 binary 模式生效，留空=最新 GA) =====
+# 取值格式参考 Adoptium release_name: 8u462-b08 / 11.0.27+6 / 21.0.7+6
+jdk8_patch_ver=
+jdk11_patch_ver=
+jdk17_patch_ver=
+jdk18_patch_ver=
+jdk21_patch_ver=
+
+# ===== 默认安装版本 =====
+jdk_default_ver=17
