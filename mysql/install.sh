@@ -209,11 +209,20 @@ Show_OS_Info
 echo ""
 echo "${CMSG}Installing dependencies...${CEND}"
 if [ "${PM}" == "yum" ] || [ "${PM}" == "dnf" ]; then
-  ${PM} -y install wget tar xz gcc gcc-c++ make cmake ncurses-devel openssl-devel libaio-devel
+  ${PM} -y install wget tar xz gcc gcc-c++ make cmake ncurses-devel openssl-devel libaio libaio-devel numactl-libs
+  # RHEL 8+ 的 libncurses.so.5 由 ncurses-compat-libs 提供（部分版本无此包，失败不影响）
+  ${PM} -y install ncurses-compat-libs 2>/dev/null
 elif [ "${PM}" == "apt-get" ]; then
+  export DEBIAN_FRONTEND=noninteractive
   ${PM} update
-  ${PM} -y install wget tar xz-utils build-essential cmake libncurses5-dev libssl-dev libaio-dev
+  ${PM} -y install wget tar xz-utils build-essential cmake libssl-dev libaio-dev numactl
+  # 24.04+ 因 t64 迁移包名变更，旧包名已移除；用回退方式兼容新旧发行版
+  ${PM} -y install libaio1t64 2>/dev/null || ${PM} -y install libaio1
+  ${PM} -y install libncurses6 libncurses-dev 2>/dev/null || ${PM} -y install libncurses5 libncurses5-dev
 fi
+
+# 预编译二进制仍链接旧 soname，补齐兼容软链（libaio.so.1 / libncurses.so.5）
+Fix_Compat_Libs
 
 # 执行安装
 echo ""
@@ -277,7 +286,18 @@ EOF
   echo "  Info saved to: ~/MySQL_ReadMe"
   echo ""
 else
+  echo ""
   echo "${CFAILURE}MySQL installation verification failed!${CEND}"
+  echo ""
+  echo "Diagnostics:"
+  Check_Bin_Libs ${mysql_install_dir}/bin/mysqld
+  Check_Bin_Libs ${mysql_install_dir}/bin/mysql
+  if [ -f "${mysql_data_dir}/mysql-error.log" ]; then
+    echo "Last lines of ${mysql_data_dir}/mysql-error.log:"
+    tail -20 ${mysql_data_dir}/mysql-error.log
+  fi
+  echo ""
+  echo "Run ./uninstall.sh to clean up before retrying."
   exit 1
 fi
 

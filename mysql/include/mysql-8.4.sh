@@ -120,12 +120,29 @@ Install_MySQL84() {
 
   # 9. 初始化数据目录
   echo "${CMSG}Initializing MySQL data directory...${CEND}"
-  ${mysql_install_dir}/bin/mysqld --initialize-insecure --user=mysql --basedir=${mysql_install_dir} --datadir=${mysql_data_dir}
+  # 二进制包依赖旧 soname，初始化前再补一次兼容软链并校验，避免 libaio.so.1 缺失导致静默失败
+  Fix_Compat_Libs
+  if ! Check_Bin_Libs ${mysql_install_dir}/bin/mysqld; then
+    echo "${CFAILURE}mysqld cannot run due to missing libraries, aborting.${CEND}"
+    kill -9 $$; exit 1;
+  fi
+  if [ -d "${mysql_data_dir}/mysql" ]; then
+    echo "${CWARNING}Data directory ${mysql_data_dir} already initialized, skip.${CEND}"
+  elif ! ${mysql_install_dir}/bin/mysqld --initialize-insecure --user=mysql --basedir=${mysql_install_dir} --datadir=${mysql_data_dir}; then
+    echo "${CFAILURE}Failed to initialize data directory ${mysql_data_dir}!${CEND}"
+    [ -f "${mysql_data_dir}/mysql-error.log" ] && tail -20 ${mysql_data_dir}/mysql-error.log
+    kill -9 $$; exit 1;
+  fi
   chown mysql:mysql -R ${mysql_data_dir}
 
   # 10. 启动服务
   service mysqld start
   sleep 3
+  if ! ${mysql_install_dir}/bin/mysqladmin --socket=/tmp/mysql.sock ping >/dev/null 2>&1; then
+    echo "${CFAILURE}MySQL failed to start!${CEND}"
+    [ -f "${mysql_data_dir}/mysql-error.log" ] && tail -20 ${mysql_data_dir}/mysql-error.log
+    kill -9 $$; exit 1;
+  fi
 
   # 11. 设置 PATH 环境变量
   if [ -z "$(grep ^'export PATH=' /etc/profile)" ]; then
@@ -137,11 +154,19 @@ Install_MySQL84() {
 
   # 12. 设置 root 密码
   echo "${CMSG}Setting MySQL root password...${CEND}"
-  ${mysql_install_dir}/bin/mysql -uroot -hlocalhost -e "CREATE USER IF NOT EXISTS root@'127.0.0.1' IDENTIFIED BY '${dbrootpwd}';"
+  if ! Check_Bin_Libs ${mysql_install_dir}/bin/mysql; then
+    echo "${CFAILURE}mysql client cannot run due to missing libraries, aborting.${CEND}"
+    kill -9 $$; exit 1;
+  fi
+  if ! ${mysql_install_dir}/bin/mysql -uroot -hlocalhost -e "CREATE USER IF NOT EXISTS root@'127.0.0.1' IDENTIFIED BY '${dbrootpwd}';"; then
+    echo "${CFAILURE}Failed to set MySQL root password!${CEND}"
+    kill -9 $$; exit 1;
+  fi
   ${mysql_install_dir}/bin/mysql -uroot -hlocalhost -e "GRANT ALL PRIVILEGES ON *.* TO root@'127.0.0.1' WITH GRANT OPTION;"
   ${mysql_install_dir}/bin/mysql -uroot -hlocalhost -e "GRANT ALL PRIVILEGES ON *.* TO root@'localhost' WITH GRANT OPTION;"
   ${mysql_install_dir}/bin/mysql -uroot -hlocalhost -e "ALTER USER root@'localhost' IDENTIFIED BY '${dbrootpwd}';"
-  ${mysql_install_dir}/bin/mysql -uroot -p${dbrootpwd} -e "RESET MASTER;" 2>/dev/null
+  # MySQL 8.4 移除了 RESET MASTER，改用 RESET BINARY LOGS AND GTIDS
+  ${mysql_install_dir}/bin/mysql -uroot -p${dbrootpwd} -e "RESET BINARY LOGS AND GTIDS;" 2>/dev/null
 
   # 13. 配置动态链接库
   rm -rf /etc/ld.so.conf.d/*mysql*.conf

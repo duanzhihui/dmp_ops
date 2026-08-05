@@ -162,6 +162,22 @@ mysql/
 - 慢查询数量
 - 磁盘空间使用
 
+## 常见问题
+
+### libaio.so.1 / libncurses.so.5 找不到
+
+MySQL 官方预编译包链接的是旧 soname，而 Ubuntu 24.04+（64 位 time_t 迁移）只提供
+`libaio.so.1t64`，ncurses 也只剩 `.so.6`，直接运行会报：
+
+```
+mysqld: error while loading shared libraries: libaio.so.1: cannot open shared object file
+mysql:  error while loading shared libraries: libncurses.so.5: cannot open shared object file
+```
+
+`install.sh` 会自动安装 `libaio1t64` / `libncurses6` 并由 `Fix_Compat_Libs`（见
+`include/check_os.sh`）补齐兼容软链，无需手工处理。若在旧版本上已安装失败，先执行
+`./uninstall.sh` 清理后重新安装。
+
 ## 注意事项
 
 1. 所有脚本需要 root 权限运行

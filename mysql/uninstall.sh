@@ -24,6 +24,7 @@ pushd ${mysql_dir} > /dev/null
 # 加载配置和公共库
 . ./options.conf
 . ./include/color.sh
+. ./include/check_os.sh
 . ./include/check_dir.sh
 
 # 显示帮助
@@ -159,6 +160,8 @@ Uninstall_MySQL() {
     elif [ "${PM}" == 'apt-get' ]; then
       update-rc.d -f mysqld remove 2>/dev/null
     fi
+    # 清理 systemd 由 init 脚本生成的 mysqld.service 缓存
+    [ "${SYSTEMD}" == "true" ] && systemctl daemon-reload 2>/dev/null
     
     echo ""
     echo "${CSUCCESS}========================================${CEND}"
