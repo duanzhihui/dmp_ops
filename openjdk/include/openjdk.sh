@@ -49,9 +49,11 @@ Install_OpenJDK() {
   # ---------- 4. 路径校验 ----------
   [ -z "${java_home}" ] && java_home=$(Detect_JAVA_HOME ${ver})
   if [ -z "${java_home}" ] || [ ! -x "${java_home}/bin/java" ]; then
-    echo "${CFAILURE}OpenJDK ${ver} install failed, Please contact the author!${CEND}" && \
-      grep -Ew 'NAME|ID|ID_LIKE|VERSION_ID|PRETTY_NAME' /etc/os-release
-    kill -9 $$; exit 1
+    echo "${CFAILURE}OpenJDK ${ver} install failed!${CEND}"
+    grep -Ew 'NAME|ID|ID_LIKE|VERSION_ID|PRETTY_NAME' /etc/os-release
+    echo "${CWARNING}See the output above for the root cause, then retry:${CEND}"
+    echo "  ${openjdk_dir}/install.sh -q --jdk_option $(Ver_To_Option ${ver}) --install_method binary"
+    return 1
   fi
 
   # ---------- 5. 环境变量与 alternatives ----------
@@ -78,9 +80,9 @@ Install_OpenJDK() {
     echo ""
     echo "${CMSG}Run 'source /etc/profile.d/openjdk.sh' or re-login to apply env in current shell${CEND}"
   else
-    echo "${CFAILURE}OpenJDK ${ver} install failed, Please contact the author!${CEND}" && \
-      grep -Ew 'NAME|ID|ID_LIKE|VERSION_ID|PRETTY_NAME' /etc/os-release
-    kill -9 $$; exit 1
+    echo "${CFAILURE}OpenJDK ${ver} verification failed: ${java_home}/bin/java is not runnable${CEND}"
+    grep -Ew 'NAME|ID|ID_LIKE|VERSION_ID|PRETTY_NAME' /etc/os-release
+    return 1
   fi
 
   # ---------- 8. 配置持久化 ----------

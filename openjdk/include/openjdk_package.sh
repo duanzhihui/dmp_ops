@@ -63,28 +63,42 @@ Install_JDK_Package() {
     return 1
   }
 
-  [ ${use_temurin} -eq 1 ] && Add_Adoptium_Repo
+  # 后台自动更新(unattended-upgrades)可能正持有 dpkg/yum 锁，先等待再安装
+  Wait_PM_Lock || return 1
+
+  [ ${use_temurin} -eq 1 ] && { Add_Adoptium_Repo || return 1; }
 
   echo "${CMSG}Installing ${pkg_name} ...${CEND}"
   if [ "${PM}" == 'apt-get' ]; then
-    apt-get -y update > /dev/null 2>&1
-    apt-get --no-install-recommends -y install ${pkg_name}
+    PM_Cmd -y update > /dev/null 2>&1
+    PM_Cmd --no-install-recommends -y install ${pkg_name}
   else
-    ${PM} -y install ${pkg_name}
+    PM_Cmd -y install ${pkg_name}
   fi
 
-  # 发行版仓库装失败时，自动回退 Adoptium 再试一次
+  # 发行版仓库缺包时，回退 Adoptium 再试一次
+  # 注意: 仅当包在仓库中确实不可用才回退，避免把锁/网络/依赖问题误判为缺包
   if [ ! -x "${java_home}/bin/java" ] && [ ${use_temurin} -eq 0 ]; then
     local detected=$(Detect_JAVA_HOME ${ver})
     if [ -z "${detected}" ]; then
-      echo "${CWARNING}Distro package failed, falling back to Adoptium Temurin...${CEND}"
+      if Pkg_Available "${pkg_name}"; then
+        echo "${CFAILURE}${pkg_name} is available in the distro repo but installation failed${CEND}"
+        echo "${CWARNING}Check the ${PM} output above, or retry with --install_method binary${CEND}"
+        return 1
+      fi
+      echo "${CWARNING}${pkg_name} not available in distro repo, falling back to Adoptium Temurin...${CEND}"
       use_temurin=1
-      Add_Adoptium_Repo
+      Add_Adoptium_Repo || return 1
       pkg_name="temurin-${ver}-jdk"
-      if [ "${PM}" == 'apt-get' ]; then
-        apt-get --no-install-recommends -y install ${pkg_name}
+      if [ "${Family}" == 'rhel' ]; then
+        java_home="/usr/lib/jvm/temurin-${ver}-jdk"
       else
-        ${PM} -y install ${pkg_name}
+        java_home="/usr/lib/jvm/temurin-${ver}-jdk-${SYS_ARCH}"
+      fi
+      if [ "${PM}" == 'apt-get' ]; then
+        PM_Cmd --no-install-recommends -y install ${pkg_name}
+      else
+        PM_Cmd -y install ${pkg_name}
       fi
     fi
   fi
@@ -104,10 +118,10 @@ Uninstall_JDK_Package() {
 
   echo "${CMSG}Removing ${pkg_name} ...${CEND}"
   if [ "${PM}" == 'apt-get' ]; then
-    apt-get -y purge ${pkg_name} > /dev/null 2>&1
-    apt-get -y autoremove > /dev/null 2>&1
+    PM_Cmd -y purge ${pkg_name} > /dev/null 2>&1
+    PM_Cmd -y autoremove > /dev/null 2>&1
   else
-    ${PM} -y remove ${pkg_name} > /dev/null 2>&1
+    PM_Cmd -y remove ${pkg_name} > /dev/null 2>&1
   fi
   return 0
 }

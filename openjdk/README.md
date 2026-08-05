@@ -132,6 +132,15 @@ export PATH=$JAVA_HOME/bin:$PATH
 | 离线/内网环境 | `binary`，预先把 tar.gz 放入 `src/` |
 | 老系统（CentOS 7 装 17/21、Ubuntu 16 装 11+、Debian 10+ 装 8） | `package` 会自动切到 Adoptium Temurin |
 
+### 包管理器锁等待
+
+Ubuntu/Debian 开机后 `unattended-upgrades`、`apt.systemd.daily` 常持有 dpkg 锁，直接安装会报
+`Could not get lock /var/lib/dpkg/lock-frontend`。脚本会：
+
+- 安装前检测 dpkg/yum 锁占用，打印占用进程并等待其结束（默认最长 600s，`options.conf` 的 `pm_lock_timeout` 可调）
+- 对 apt 额外附带 `-o DPkg::Lock::Timeout` 与 `DEBIAN_FRONTEND=noninteractive`
+- 等锁超时则明确报错退出，不会误判为"仓库缺包"而去回退 Adoptium
+
 ### 升级策略
 
 - `upgrade.sh` **只做同 feature 版本的补丁升级**（17.0.x → 17.0.y）
@@ -169,6 +178,11 @@ A: 用 `binary` 模式，提前把 Adoptium 的 `OpenJDK*-jdk_*_linux_hotspot_*.
 **Q: Adoptium 仓库不可用？**
 A: `options.conf` 中的 `adoptium_deb_mirror` / `adoptium_rpm_mirror` / `adoptium_file_mirror`
 可改为其他镜像；GPG 公钥已随包提供在 `src/adoptium.key`。
+
+**Q: 安装报 `Could not get lock /var/lib/dpkg/lock-frontend`？**
+A: 后台自动更新正在占用 apt。脚本已内置等锁逻辑（默认 600s）；若仍超时，可
+`ps -ef | grep -E 'apt|dpkg|unattended'` 确认占用进程，等其结束后重试，或调大 `options.conf` 的 `pm_lock_timeout`。
+临时禁用后台更新：`systemctl stop unattended-upgrades apt-daily.timer apt-daily-upgrade.timer`。
 
 **Q: 是否支持 32 位系统？**
 A: 不支持，`check_os.sh` 会直接拒绝。

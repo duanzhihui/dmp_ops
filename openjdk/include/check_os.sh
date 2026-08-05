@@ -27,15 +27,15 @@ Check_OS() {
       API_ARCH=aarch64
       ;;
     *)
-      echo "${CFAILURE}Unsupported architecture: ${ARCH}, only x86_64/aarch64 are supported${CEND}"
-      kill -9 $$; exit 1
+      echo "${CFAILURE}Unsupported architecture: ${ARCH}, only x86_64/aarch64 are supported${CEND}" >&2
+      exit 1
       ;;
   esac
 
   # 拒绝 32 位系统
   if [ "$(getconf LONG_BIT 2>/dev/null)" != "64" ]; then
-    echo "${CWARNING}32-bit OS are not supported!${CEND}"
-    kill -9 $$; exit 1
+    echo "${CWARNING}32-bit OS are not supported!${CEND}" >&2
+    exit 1
   fi
 
   THREAD=$(grep -c '^processor' /proc/cpuinfo 2>/dev/null)
@@ -45,8 +45,8 @@ Check_OS() {
   if [ -e "/etc/os-release" ]; then
     . /etc/os-release
   else
-    echo "${CFAILURE}/etc/os-release does not exist!${CEND}"
-    kill -9 $$; exit 1
+    echo "${CFAILURE}/etc/os-release does not exist!${CEND}" >&2
+    exit 1
   fi
 
   Platform=$(echo "${ID}" | tr '[:upper:]' '[:lower:]')
@@ -121,15 +121,15 @@ Check_OS() {
         ;;
     esac
   else
-    echo "${CFAILURE}Does not support this OS: ${Platform}${CEND}"
-    grep -Ew 'NAME|ID|ID_LIKE|VERSION_ID|PRETTY_NAME' /etc/os-release
-    kill -9 $$; exit 1
+    echo "${CFAILURE}Does not support this OS: ${Platform}${CEND}" >&2
+    grep -Ew 'NAME|ID|ID_LIKE|VERSION_ID|PRETTY_NAME' /etc/os-release >&2
+    exit 1
   fi
 
   # ---------- 最低版本要求 ----------
   if [ ${RHEL_ver} -lt 7 ] 2>/dev/null || [ ${Debian_ver} -lt 9 ] 2>/dev/null || [ ${Ubuntu_ver} -lt 16 ] 2>/dev/null; then
-    echo "${CFAILURE}Does not support this OS, Please install CentOS 7+, Debian 9+, Ubuntu 16+${CEND}"
-    kill -9 $$; exit 1
+    echo "${CFAILURE}Does not support this OS, Please install CentOS 7+, Debian 9+, Ubuntu 16+${CEND}" >&2
+    exit 1
   fi
 
   echo "${CMSG}OS Detection:${CEND}"

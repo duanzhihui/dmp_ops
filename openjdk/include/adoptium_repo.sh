@@ -19,12 +19,12 @@ enabled=1
 gpgcheck=0
 EOF
     fi
-    ${PM} clean all > /dev/null 2>&1
-    ${PM} makecache > /dev/null 2>&1
+    PM_Cmd clean all > /dev/null 2>&1
+    PM_Cmd makecache > /dev/null 2>&1
   else
     if [ -n "$(grep -rl 'Adoptium\|adoptium' /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null)" ]; then
       echo "${CMSG}Adoptium apt repo already configured${CEND}"
-      apt-get -y update > /dev/null 2>&1
+      PM_Cmd -y update > /dev/null 2>&1
       return 0
     fi
     echo "${CMSG}Configuring Adoptium apt repo...${CEND}"
@@ -37,8 +37,10 @@ EOF
     if [ $? -ne 0 ]; then
       echo "${CWARNING}Failed to import Adoptium GPG key, repo may be untrusted${CEND}"
     fi
+    # apt-add-repository 内部会执行 apt update，同样需要先等锁
+    Wait_PM_Lock || return 1
     apt-add-repository --yes "${adoptium_deb_mirror}" > /dev/null 2>&1
-    apt-get -y update > /dev/null 2>&1
+    PM_Cmd -y update > /dev/null 2>&1
   fi
   return 0
 }
@@ -56,7 +58,7 @@ Del_Adoptium_Repo() {
       echo "${CMSG}Removed ${f}${CEND}"
     done
     sed -i '/[Aa]doptium/d' /etc/apt/sources.list 2>/dev/null
-    apt-get -y update > /dev/null 2>&1
+    PM_Cmd -y update > /dev/null 2>&1
   fi
   return 0
 }

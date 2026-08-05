@@ -99,10 +99,10 @@ Upgrade_OpenJDK() {
     Get_Pkg_Name ${ver}
     echo "${CMSG}Upgrading ${pkg_name} via ${PM} ...${CEND}"
     if [ "${PM}" == 'apt-get' ]; then
-      apt-get -y update > /dev/null 2>&1
-      apt-get -y install --only-upgrade ${pkg_name}
+      PM_Cmd -y update > /dev/null 2>&1
+      PM_Cmd -y install --only-upgrade ${pkg_name}
     else
-      ${PM} -y update ${pkg_name}
+      PM_Cmd -y update ${pkg_name}
     fi
     java_home=$(Detect_JAVA_HOME ${ver})
   fi
