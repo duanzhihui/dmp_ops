@@ -289,6 +289,7 @@ Usage: monitor.sh [OPTIONS]
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `mirror_link` | `https://mirrors.oneinstack.com/oneinstack/src` | 下载镜像源 |
+| `maven_mirror` | `https://maven.aliyun.com/repository/public` | Maven 镜像源，加速连接器插件下载（留空则用 Maven 中央仓库） |
 | `seatunnel_install_dir` | `/opt/seatunnel` | 安装目录 |
 | `seatunnel_data_dir` | `/opt/seatunnel/data` | 数据目录 |
 | `seatunnel_log_dir` | `/opt/seatunnel/logs` | 日志目录 |
@@ -440,12 +441,14 @@ ssh 192.168.1.3 'systemctl start seatunnel-worker'
 1. **必须 root 执行**：所有脚本开头均校验 `id -u == 0`。
 2. **集群部署需 SSH 免密**：`cluster.sh` 通过 `ssh -o StrictHostKeyChecking=no` 远程执行，请提前配置好密钥（`ssh-copy-id`）。
 3. **下载源**：优先 `mirrors.oneinstack.com`，失败回退到 Apache archive 与 dlcdn；网络受限环境可手动将 `apache-seatunnel-<version>-bin.tar.gz` 放入 `src/` 目录。
-4. **跨大版本升级**：脚本会告警兼容性风险，请先阅读官方 Release Notes 并对运行中作业做好 savepoint。
+4. **连接器插件下载加速**：`bin/install-plugin.sh` 默认通过 `mvnw` 从 `https://repo.maven.apache.org` 下载连接器 jar，国内访问极慢。本脚本在执行 `install-plugin.sh` 前会根据 `options.conf` 中的 `maven_mirror` 自动生成 `~/.m2/settings.xml`（已存在则备份），让 `mvnw` 走国内镜像（默认阿里云）。如需更换镜像，修改 `maven_mirror` 即可（华为云/腾讯云/网易等，见 `options.conf` 注释）；留空则恢复使用 Maven 中央仓库。后续手动执行 `install-plugin.sh` 增装连接器时同样会走该镜像。
+5. **跨大版本升级**：脚本会告警兼容性风险，请先阅读官方 Release Notes 并对运行中作业做好 savepoint。
 5. **数据安全**：卸载默认会重命名备份数据目录（`<data_dir>_YYYYMMDDHHMM`），如需彻底删除请显式确认；`--keep_data` 则完全保留。
 6. **配置回写**：安装/备份向导会通过 `sed -i` 修改 `options.conf`，请勿在脚本运行期间手工编辑该文件。
 7. **端口规划**：Hazelcast 端口默认 5801，集群节点间需互通；REST API 复用该端口。
 8. **Java 版本**：推荐 OpenJDK 11；若检测到 Java 8 也可运行，但低于 8 会被拒绝。
 9. **告警配置**：`alert_email` 依赖系统 `mail` 命令，`webhook_url` 兼容钉钉/飞书/Slack 的 JSON `{text: ...}` 格式。
+10. **Maven settings.xml 备份**：安装时若 `~/.m2/settings.xml` 已存在，会先备份为 `settings.xml.bak.<时间戳>` 再覆盖为本脚本生成的镜像配置；如需保留原有自定义配置，请在安装后合并备份文件。
 
 ---
 

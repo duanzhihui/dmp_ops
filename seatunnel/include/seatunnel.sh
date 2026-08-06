@@ -51,7 +51,11 @@ Install_SeaTunnel() {
   if [ -n "${connectors}" ]; then
     # Generate plugin_config first
     Generate_Plugin_Config ${seatunnel_install_dir}/config
-    
+
+    # Configure Maven mirror to accelerate plugin download
+    # (install-plugin.sh uses mvnw which reads ~/.m2/settings.xml)
+    Generate_Maven_Settings
+
     # Run install-plugin.sh
     pushd ${seatunnel_install_dir} > /dev/null
     sh bin/install-plugin.sh ${seatunnel_ver}

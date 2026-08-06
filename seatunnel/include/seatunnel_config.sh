@@ -192,3 +192,43 @@ Generate_All_Configs() {
   Generate_JVM_Options ${config_dir} ${mode}
   Generate_Plugin_Config ${config_dir}
 }
+
+Generate_Maven_Settings() {
+  # 为 mvnw / mvn 生成 ~/.m2/settings.xml，使用国内镜像加速连接器插件下载
+  # install-plugin.sh 默认从 https://repo.maven.apache.org 下载，国内极慢
+  local mirror=${maven_mirror:-}
+
+  if [ -z "${mirror}" ]; then
+    echo "${CMSG}maven_mirror is empty, using Maven Central (may be slow in CN).${CEND}"
+    return 0
+  fi
+
+  echo "${CMSG}Generating Maven settings.xml with mirror: ${mirror}...${CEND}"
+
+  # mvnw / mvn 都会读取 ${HOME}/.m2/settings.xml
+  local m2_dir="${HOME}/.m2"
+  mkdir -p ${m2_dir}
+
+  # 备份已存在的 settings.xml
+  if [ -f "${m2_dir}/settings.xml" ]; then
+    /bin/cp -f ${m2_dir}/settings.xml ${m2_dir}/settings.xml.bak.$(date +%Y%m%d%H%M%S) 2>/dev/null
+  fi
+
+  cat > ${m2_dir}/settings.xml << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0 https://maven.apache.org/xsd/settings-1.2.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>oneinstack-mirror</id>
+      <name>OneinStack Maven Mirror</name>
+      <url>${mirror}</url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>
+EOF
+
+  echo "${CSUCCESS}Maven settings.xml generated at ${m2_dir}/settings.xml${CEND}"
+}
