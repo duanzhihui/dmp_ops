@@ -38,6 +38,8 @@ Options:
 
   -u, --user USER         Override SSH user (default: ${ssh_user})
   -p, --port PORT         Override SSH port (default: ${ssh_port})
+      --password PWD       Provide SSH password (same for all hosts)
+      --password-file FILE Read passwords from file (one per line, for different passwords)
 
 Examples:
   # Interactive menu
@@ -48,6 +50,12 @@ Examples:
 
   # Add multiple hosts with custom user
   $0 --add 192.168.1.10 192.168.1.11 --user root
+
+  # Add hosts with same password (quiet mode)
+  $0 --quiet --add 192.168.1.10 192.168.1.11 --password mypass
+
+  # Add hosts with different passwords from file
+  $0 --quiet --add 192.168.1.10 192.168.1.11 --password-file passwords.txt
 
   # Add host with specific user and port
   $0 --add root@192.168.1.12:2222
@@ -219,8 +227,10 @@ hosts=()
 file_path=""
 override_user=""
 override_port=""
+cli_password=""
+cli_password_file=""
 
-TEMP=$(getopt -o hqma:f:r:lcu:p: --long help,quiet,add:,add-file:,remove:,list,check,mesh,init,user:,port: -- "$@" 2>/dev/null)
+TEMP=$(getopt -o hqma:f:r:lcu:p: --long help,quiet,add:,add-file:,remove:,list,check,mesh,init,user:,port:,password:,password-file: -- "$@" 2>/dev/null)
 [ $? -ne 0 ] && { Show_Help; exit 1; }
 
 eval set -- "${TEMP}"
@@ -279,6 +289,14 @@ while true; do
       ;;
     -p|--port)
       override_port="$2"
+      shift 2
+      ;;
+    --password)
+      cli_password="$2"
+      shift 2
+      ;;
+    --password-file)
+      cli_password_file="$2"
       shift 2
       ;;
     --)

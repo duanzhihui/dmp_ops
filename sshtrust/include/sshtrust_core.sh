@@ -76,11 +76,12 @@ Host_In_List() {
 }
 
 # 添加单台主机互信
-# 参数: $1=主机字符串 $2=密码
+# 参数: $1=主机字符串 $2=密码 $3=per_host_pwd标志 $4=密码序号(用于密码文件模式)
 Add_Trust_Single() {
   local host_str=$1
   local password=$2
   local per_host_pwd=${3:-0}
+  local pwd_index=${4:-0}
 
   Parse_Host "${host_str}"
   local remote_user="${_parse_user}"
@@ -89,7 +90,12 @@ Add_Trust_Single() {
 
   echo "${CMSG}--- Adding trust: ${remote_user}@${remote_host}:${remote_port} ---${CEND}"
 
-  # 如果需要逐台输入密码
+  # 密码文件模式：按序号从数组取密码
+  if [ ${#cli_passwords[@]} -gt 0 ] && [ ${pwd_index} -lt ${#cli_passwords[@]} ]; then
+    password="${cli_passwords[${pwd_index}]}"
+  fi
+
+  # 逐台输入密码模式（交互）
   if [ "${per_host_pwd}" -eq 1 ] && [ -z "${password}" ]; then
     read -s -e -p "Enter password for ${remote_user}@${remote_host}: " password
     echo ""
@@ -151,7 +157,26 @@ Add_Trust() {
   local password=""
   local per_host_pwd=0
 
-  if [ "${quiet_mode}" -ne 1 ]; then
+  # 优先使用命令行传入的密码
+  if [ -n "${cli_password}" ]; then
+    password="${cli_password}"
+  elif [ -n "${cli_password_file}" ]; then
+    # 密码文件模式：每行一个密码，对应每台主机
+    if [ ! -f "${cli_password_file}" ]; then
+      echo "${CFAILURE}Password file not found: ${cli_password_file}${CEND}"
+      return 1
+    fi
+    cli_passwords=()
+    while IFS= read -r line || [ -n "$line" ]; do
+      line=$(echo "${line}" | sed 's/#.*//' | xargs)
+      [ -z "${line}" ] && continue
+      cli_passwords+=("${line}")
+    done < "${cli_password_file}"
+    echo "${CMSG}Loaded ${#cli_passwords[@]} passwords from file${CEND}"
+    if [ ${#cli_passwords[@]} -ne ${#hosts[@]} ]; then
+      echo "${CWARNING}Warning: ${#cli_passwords[@]} passwords for ${#hosts[@]} hosts (mismatch)${CEND}"
+    fi
+  elif [ "${quiet_mode}" -ne 1 ]; then
     echo "${CMSG}Password options:${CEND}"
     echo "  1) Use same password for all hosts"
     echo "  2) Enter password per host"
@@ -172,12 +197,16 @@ Add_Trust() {
         echo ""
         ;;
     esac
+  else
+    echo "${CFAILURE}No password provided. Use --password or --password-file in quiet mode.${CEND}"
+    return 1
   fi
 
+  local idx=0
   for host_str in "${hosts[@]}"; do
     [ -z "${host_str}" ] && continue
 
-    if Add_Trust_Single "${host_str}" "${password}" "${per_host_pwd}"; then
+    if Add_Trust_Single "${host_str}" "${password}" "${per_host_pwd}" "${idx}"; then
       success_count=$((success_count + 1))
       # 添加到 trust_hosts（如果不在列表中）
       if ! Host_In_List "${host_str}"; then
@@ -191,6 +220,7 @@ Add_Trust() {
     else
       fail_count=$((fail_count + 1))
     fi
+    idx=$((idx + 1))
     echo ""
   done
 
