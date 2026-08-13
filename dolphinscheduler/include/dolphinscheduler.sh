@@ -72,42 +72,45 @@ Install_DolphinScheduler_PseudoCluster() {
   local ds_ver=$1
   local ds_pkg=$(Get_DolphinScheduler_Pkg "${ds_ver}")
 
-  echo "${CMSG}Installing DolphinScheduler ${ds_ver} (Pseudo-Cluster mode)...${CEND}"
-
-  # Check if already installed
-  if [ -d "${dolphinscheduler_install_dir}" ] && [ -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
-    echo "${CWARNING}DolphinScheduler is already installed at ${dolphinscheduler_install_dir}${CEND}"
-    return 0
-  fi
+  echo "${CMSG}Installing DolphinScheduler ${ds_ver} (roles: ${node_roles:-master,worker,api,alert})...${CEND}"
 
   # Create directories
   mkdir -p ${dolphinscheduler_install_dir}
   mkdir -p ${dolphinscheduler_data_dir}
   mkdir -p ${dolphinscheduler_log_dir}
 
-  # Extract package
-  echo "${CMSG}Extracting ${ds_pkg}...${CEND}"
-  tar xzf ${ds_dir}/src/${ds_pkg} -C ${dolphinscheduler_install_dir} --strip-components=1
+  # Extract package (skip if already extracted, but keep reconfiguring so that a
+  # re-run after a failed attempt actually repairs the installation)
+  if [ -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
+    echo "${CWARNING}DolphinScheduler already extracted at ${dolphinscheduler_install_dir}, skipping extraction.${CEND}"
+  else
+    echo "${CMSG}Extracting ${ds_pkg}...${CEND}"
+    tar xzf ${ds_dir}/src/${ds_pkg} -C ${dolphinscheduler_install_dir} --strip-components=1
 
-  if [ ! -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
-    echo "${CFAILURE}Failed to extract DolphinScheduler package!${CEND}"
-    return 1
+    if [ ! -f "${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh" ]; then
+      echo "${CFAILURE}Failed to extract DolphinScheduler package!${CEND}"
+      return 1
+    fi
   fi
 
   # Download and install MySQL JDBC driver if using MySQL
   if [ "${db_type}" == "mysql" ]; then
     Download_MySQL_JDBC
-    Install_MySQL_JDBC
+    Install_MySQL_JDBC || return 1
   fi
 
   # Configure environment
-  Configure_Env_PseudoCluster "${ds_ver}"
+  Configure_Env_PseudoCluster "${ds_ver}" || return 1
 
   # Configure install_env.sh
   Configure_Install_Env
 
-  # Initialize database
-  Init_Database
+  # Initialize database (shared schema: only done once, on the first node)
+  if [ "${skip_db_init}" == "y" ]; then
+    echo "${CMSG}Skipping database initialization (schema already initialized by the first node).${CEND}"
+  else
+    Init_Database || return 1
+  fi
 
   # Set ownership
   chown -R ${run_user}:${run_group} ${dolphinscheduler_install_dir}
@@ -117,7 +120,7 @@ Install_DolphinScheduler_PseudoCluster() {
   # Install systemd services
   Install_PseudoCluster_Services
 
-  echo "${CSUCCESS}DolphinScheduler ${ds_ver} (Pseudo-Cluster) installed successfully!${CEND}"
+  echo "${CSUCCESS}DolphinScheduler ${ds_ver} installed successfully (roles: ${node_roles:-master,worker,api,alert})!${CEND}"
 }
 
 # Configure environment for Pseudo-Cluster mode
@@ -498,116 +501,78 @@ EOF
   echo "${CSUCCESS}Standalone service installed.${CEND}"
 }
 
-# Install Pseudo-Cluster systemd services
+# Echo the roles whose systemd unit is installed on this node
+Installed_Cluster_Roles() {
+  local role out=""
+  for role in master worker api alert; do
+    [ -f "/lib/systemd/system/dolphinscheduler-${role}.service" ] && out="${out} ${role}"
+  done
+  echo ${out}
+}
+
+# Write a single systemd unit file
+# $1 = role (master|worker|api|alert), $2 = human readable description
+Write_Service_Unit() {
+  local role=$1
+  local description=$2
+  local server="${role}-server"
+
+  cat > /lib/systemd/system/dolphinscheduler-${role}.service << EOF
+[Unit]
+Description=${description}
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=${run_user}
+Group=${run_group}
+Environment="JAVA_HOME=${JAVA_HOME}"
+ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start ${server}
+ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop ${server}
+Restart=on-failure
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
+LimitNOFILE=65535
+LimitNPROC=65535
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# Install systemd services for the roles assigned to this node.
+# Units for roles this node no longer serves are stopped and removed.
 Install_PseudoCluster_Services() {
-  echo "${CMSG}Installing Pseudo-Cluster systemd services...${CEND}"
+  echo "${CMSG}Installing systemd services for roles: ${node_roles:-master,worker,api,alert}...${CEND}"
 
-  # Master Server
-  cat > /lib/systemd/system/dolphinscheduler-master.service << EOF
-[Unit]
-Description=Apache DolphinScheduler Master Server
-After=network.target
-Wants=network-online.target
+  local role description
+  for role in master worker api alert; do
+    case "${role}" in
+      master) description="Apache DolphinScheduler Master Server" ;;
+      worker) description="Apache DolphinScheduler Worker Server" ;;
+      api)    description="Apache DolphinScheduler API Server" ;;
+      alert)  description="Apache DolphinScheduler Alert Server" ;;
+    esac
 
-[Service]
-Type=forking
-User=${run_user}
-Group=${run_group}
-Environment="JAVA_HOME=${JAVA_HOME}"
-ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start master-server
-ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop master-server
-Restart=on-failure
-RestartSec=60
-StartLimitBurst=3
-StartLimitIntervalSec=600
-LimitNOFILE=65535
-LimitNPROC=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  # Worker Server
-  cat > /lib/systemd/system/dolphinscheduler-worker.service << EOF
-[Unit]
-Description=Apache DolphinScheduler Worker Server
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=forking
-User=${run_user}
-Group=${run_group}
-Environment="JAVA_HOME=${JAVA_HOME}"
-ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start worker-server
-ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop worker-server
-Restart=on-failure
-RestartSec=60
-StartLimitBurst=3
-StartLimitIntervalSec=600
-LimitNOFILE=65535
-LimitNPROC=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  # API Server
-  cat > /lib/systemd/system/dolphinscheduler-api.service << EOF
-[Unit]
-Description=Apache DolphinScheduler API Server
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=forking
-User=${run_user}
-Group=${run_group}
-Environment="JAVA_HOME=${JAVA_HOME}"
-ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start api-server
-ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop api-server
-Restart=on-failure
-RestartSec=60
-StartLimitBurst=3
-StartLimitIntervalSec=600
-LimitNOFILE=65535
-LimitNPROC=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-  # Alert Server
-  cat > /lib/systemd/system/dolphinscheduler-alert.service << EOF
-[Unit]
-Description=Apache DolphinScheduler Alert Server
-After=network.target
-Wants=network-online.target
-
-[Service]
-Type=forking
-User=${run_user}
-Group=${run_group}
-Environment="JAVA_HOME=${JAVA_HOME}"
-ExecStart=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh start alert-server
-ExecStop=${dolphinscheduler_install_dir}/bin/dolphinscheduler-daemon.sh stop alert-server
-Restart=on-failure
-RestartSec=60
-StartLimitBurst=3
-StartLimitIntervalSec=600
-LimitNOFILE=65535
-LimitNPROC=65535
-
-[Install]
-WantedBy=multi-user.target
-EOF
+    if Has_Role ${role}; then
+      Write_Service_Unit "${role}" "${description}"
+    elif [ -f "/lib/systemd/system/dolphinscheduler-${role}.service" ]; then
+      echo "${CWARNING}Role '${role}' is not assigned to this node, removing its service...${CEND}"
+      systemctl stop dolphinscheduler-${role} 2>/dev/null
+      systemctl disable dolphinscheduler-${role} 2>/dev/null
+      rm -f /lib/systemd/system/dolphinscheduler-${role}.service
+    fi
+  done
 
   systemctl daemon-reload
-  systemctl enable dolphinscheduler-master
-  systemctl enable dolphinscheduler-worker
-  systemctl enable dolphinscheduler-api
-  systemctl enable dolphinscheduler-alert
-  echo "${CSUCCESS}Pseudo-Cluster services installed.${CEND}"
+
+  for role in master worker api alert; do
+    Has_Role ${role} && systemctl enable dolphinscheduler-${role}
+  done
+
+  echo "${CSUCCESS}Services installed.${CEND}"
 }
 
 # Start Standalone server
@@ -625,25 +590,31 @@ Start_Standalone() {
   fi
 }
 
-# Start Pseudo-Cluster services
+# Start the services assigned to this node (order: Master -> Worker -> API -> Alert)
 Start_PseudoCluster() {
-  echo "${CMSG}Starting DolphinScheduler Pseudo-Cluster services...${CEND}"
+  echo "${CMSG}Starting DolphinScheduler services (roles: ${node_roles:-master,worker,api,alert})...${CEND}"
 
-  # Start in order: Master -> Worker -> API -> Alert
-  systemctl start dolphinscheduler-master
-  sleep 3
-  systemctl start dolphinscheduler-worker
-  sleep 3
-  systemctl start dolphinscheduler-api
-  sleep 3
-  systemctl start dolphinscheduler-alert
+  local role has_error=0
+  for role in master worker api alert; do
+    Has_Role ${role} || continue
+    systemctl start dolphinscheduler-${role}
+    sleep 3
+  done
 
   sleep 5
   echo "${CMSG}Checking service status...${CEND}"
-  systemctl status dolphinscheduler-master --no-pager
-  systemctl status dolphinscheduler-worker --no-pager
-  systemctl status dolphinscheduler-api --no-pager
-  systemctl status dolphinscheduler-alert --no-pager
+  for role in master worker api alert; do
+    Has_Role ${role} || continue
+    if systemctl is-active --quiet dolphinscheduler-${role}; then
+      echo "${CSUCCESS}[RUNNING]${CEND} ${role}-server"
+    else
+      echo "${CFAILURE}[FAILED]${CEND} ${role}-server"
+      journalctl -u dolphinscheduler-${role} --no-pager -n 20
+      has_error=1
+    fi
+  done
+
+  return ${has_error}
 }
 
 # Uninstall DolphinScheduler

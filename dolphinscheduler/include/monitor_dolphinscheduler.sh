@@ -145,26 +145,35 @@ Monitor_DolphinScheduler_Status() {
     Check_DolphinScheduler_HTTP "http://localhost:${web_port}/dolphinscheduler/ui" || has_error=1
   fi
 
-  # Check pseudo-cluster/cluster mode
-  if [ -f "/lib/systemd/system/dolphinscheduler-master.service" ]; then
+  # Check pseudo-cluster/cluster mode: only the roles installed on this node
+  local cluster_units=$(ls /lib/systemd/system/dolphinscheduler-*.service 2>/dev/null | grep -v 'standalone')
+  if [ -n "${cluster_units}" ]; then
     echo "${CMSG}--- Cluster Mode ---${CEND}"
 
     # Master Server
-    Check_DolphinScheduler_Process "Master Server" "MasterServer" || has_error=1
-    Check_DolphinScheduler_Port "Master Server" ${master_port} || has_error=1
+    if [ -f "/lib/systemd/system/dolphinscheduler-master.service" ]; then
+      Check_DolphinScheduler_Process "Master Server" "MasterServer" || has_error=1
+      Check_DolphinScheduler_Port "Master Server" ${master_rpc_port} || has_error=1
+    fi
 
     # Worker Server
-    Check_DolphinScheduler_Process "Worker Server" "WorkerServer" || has_error=1
-    Check_DolphinScheduler_Port "Worker Server" ${worker_port} || has_error=1
+    if [ -f "/lib/systemd/system/dolphinscheduler-worker.service" ]; then
+      Check_DolphinScheduler_Process "Worker Server" "WorkerServer" || has_error=1
+      Check_DolphinScheduler_Port "Worker Server" ${worker_rpc_port} || has_error=1
+    fi
 
     # API Server
-    Check_DolphinScheduler_Process "API Server" "ApiApplicationServer" || has_error=1
-    Check_DolphinScheduler_Port "API Server" ${api_port} || has_error=1
-    Check_DolphinScheduler_HTTP "http://localhost:${api_port}/dolphinscheduler/ui" || has_error=1
+    if [ -f "/lib/systemd/system/dolphinscheduler-api.service" ]; then
+      Check_DolphinScheduler_Process "API Server" "ApiApplicationServer" || has_error=1
+      Check_DolphinScheduler_Port "API Server" ${api_port} || has_error=1
+      Check_DolphinScheduler_HTTP "http://localhost:${api_port}/dolphinscheduler/ui" || has_error=1
+    fi
 
     # Alert Server
-    Check_DolphinScheduler_Process "Alert Server" "AlertServer" || has_error=1
-    Check_DolphinScheduler_Port "Alert Server" ${alert_port} || has_error=1
+    if [ -f "/lib/systemd/system/dolphinscheduler-alert.service" ]; then
+      Check_DolphinScheduler_Process "Alert Server" "AlertServer" || has_error=1
+      Check_DolphinScheduler_Port "Alert Server" ${alert_rpc_port} || has_error=1
+    fi
 
     # ZooKeeper
     Check_DolphinScheduler_ZK || has_error=1

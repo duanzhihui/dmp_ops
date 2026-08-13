@@ -40,11 +40,38 @@ Apache DolphinScheduler 集群部署工具
 ### 3. Cluster 模式
 
 ```bash
-# 1. 配置 options.conf 中的集群节点信息
-# 2. 配置 SSH 免密登录
-# 3. 执行安装
+# 1. 配置 options.conf 中的集群节点信息（ips / masters / workers / api_servers / alert_server）
+# 2. 确保数据库已对所有节点 IP 授权，ZooKeeper 已启动
+# 3. 在控制节点执行安装（脚本会自动分发到各节点）
 ./install.sh --deploy_mode cluster --ds_ver 3
+
+# 查看集群状态
+./install.sh --status
 ```
+
+集群模式是**按角色部署**的：`ips` 中的每个节点必须至少出现在
+`masters` / `workers` / `api_servers` / `alert_server` 之一，节点只会安装并启用
+自己所属角色的 systemd 服务。元数据库 schema 是共享的，只会在 `ips` 的**第一个节点**
+初始化一次。
+
+远端节点通过 `remote_ssh_user`（默认 `root`）连接——部署用户 `dolphinscheduler`
+是脚本在各节点上创建的，因此不能用它来引导一台全新的机器。首次部署若尚未配置免密：
+
+- 在 `options.conf` 中填入 `ssh_password`（需要 `sshpass`，仅用于一次性下发公钥），或
+- 交互式运行安装脚本，按提示输入各节点密码，或
+- 自行执行 `ssh-copy-id -p 22 root@<节点IP>`
+
+**数据库授权**：每个节点都会直连元数据库，所以账号必须对所有节点地址授权：
+
+```sql
+CREATE DATABASE IF NOT EXISTS dolphinscheduler DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+CREATE USER 'dolphinscheduler'@'10.0.50.%' IDENTIFIED BY '<password>';
+GRANT ALL PRIVILEGES ON dolphinscheduler.* TO 'dolphinscheduler'@'10.0.50.%';
+FLUSH PRIVILEGES;
+```
+
+否则会看到 `Host '<ip>' is not allowed to connect to this MySQL server`，安装会在
+初始化数据库前直接中止。
 
 ## 目录结构
 
@@ -97,13 +124,28 @@ db_password=
 # ZooKeeper 配置（pseudo-cluster 和 cluster 模式必须）
 zk_hosts=localhost:2181
 
+# 端口配置（pseudo-cluster / cluster 模式）
+api_port=25333
+master_rpc_port=5678    # master 内部 RPC 端口
+master_web_port=5679    # master actuator/metrics 端口
+worker_rpc_port=1234
+worker_web_port=1235
+alert_rpc_port=50052
+alert_web_port=50053
+
 # 集群节点配置（cluster 模式必须）
 ips=localhost
 masters=localhost
 workers=localhost:default
 alert_server=localhost
 api_servers=localhost
+
+# 集群部署用的 SSH 账号（默认 root）及其密码（仅用于一次性下发公钥，可留空）
+remote_ssh_user=root
+ssh_password=
 ```
+
+> 填写了 `db_password` / `ssh_password` 后建议 `chmod 600 options.conf`。
 
 ## 服务管理
 
@@ -117,6 +159,8 @@ systemctl status dolphinscheduler-standalone
 ```
 
 ### Pseudo-Cluster / Cluster 模式
+
+Cluster 模式下每个节点只有自己角色对应的服务单元，因此下面的命令需在拥有该角色的节点上执行。
 
 ```bash
 # Master Server

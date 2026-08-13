@@ -92,9 +92,11 @@
 |------|---------|--------|
 | Standalone Server | web_port | 12345 |
 | API Server | api_port | 25333 |
-| Master Server | master_port | 5678 |
-| Worker Server | worker_port | 1234 |
-| Alert Server | alert_port | 50052 |
+| Master Server (RPC / Web) | master_rpc_port / master_web_port | 5678 / 5679 |
+| Worker Server (RPC / Web) | worker_rpc_port / worker_web_port | 1234 / 1235 |
+| Alert Server (RPC / Web) | alert_rpc_port / alert_web_port | 50052 / 50053 |
+
+> Master/Worker/Alert 各自有两个端口：内部 RPC 端口和 Jetty actuator/metrics 端口，二者不能相同。
 
 ## 下载地址
 
@@ -133,11 +135,11 @@
 - 运行用户：run_user, run_group
 - 安装目录：dolphinscheduler_home, dolphinscheduler_install_dir
 - 数据目录：dolphinscheduler_data_dir, dolphinscheduler_log_dir
-- 端口配置：web_port, api_port, master_port, worker_port, alert_port
+- 端口配置：web_port, api_port, master_rpc_port, master_web_port, worker_rpc_port, worker_web_port, alert_rpc_port, alert_web_port
 - 部署模式：deploy_mode (standalone/pseudo-cluster/cluster)
 - 数据库配置：db_type, db_host, db_port, db_name, db_user, db_password
 - ZooKeeper 配置：zk_hosts
-- 集群配置：ips, ssh_port, masters, workers, alert_server, api_servers
+- 集群配置：ips, ssh_port, masters, workers, alert_server, api_servers, remote_ssh_user, ssh_password
 - 资源存储配置：resource_storage_type, resource_local_path, hdfs_*, s3_*
 - JAVA_HOME 配置
 - 备份配置：backup_dir, expired_days, backup_destination, backup_content
@@ -203,13 +205,15 @@ zookeeper_ver=3.9.3
 - `Check_Deps()` — 检测并安装系统依赖（wget, tar, psmisc 等）
 - `Create_User()` — 创建运行用户
 - `Detect_Network()` — 检测网络并获取本机 IP
-- `Configure_Sudo()` — 配置 sudo 权限
+- `Configure_Sudo()` — 配置 sudo 权限（写入 /etc/sudoers.d/ 并用 visudo -c 校验）
 - `Configure_SSH()` — 配置 SSH 免密登录
 - `Check_Java()` — 检测 Java 环境，设置 JAVA_HOME
 - `Install_Java()` — 安装 OpenJDK 8
 - `Check_ZooKeeper()` — 检测 ZooKeeper 连通性
 - `Check_Database()` — 检测数据库连通性
-- `Check_Ports()` — 检测端口占用
+- `Print_DB_Access_Hint()` — 打印各节点所需的建库/授权 SQL
+- `Has_Role()` — 判断本节点是否承担某角色（master/worker/api/alert）
+- `Check_Port()` / `Check_Ports()` — 检测端口占用（按角色过滤；DolphinScheduler 自身占用不算冲突）
 
 ### 7. `include/dolphinscheduler.sh` — 安装/卸载模块
 
@@ -225,17 +229,17 @@ zookeeper_ver=3.9.3
   6. 安装 systemd 服务
   7. 验证安装结果
 
-- `Install_DolphinScheduler_PseudoCluster()` — Pseudo-Cluster 模式安装
-  1. 检测是否已安装（幂等）
-  2. 创建目录
-  3. 解压安装包
-  4. 安装 MySQL JDBC 驱动（如使用 MySQL）
-  5. 配置环境变量
-  6. 配置 install_env.sh
-  7. 配置 application.yaml
-  8. 初始化数据库
-  9. 设置目录权限
-  10. 安装 systemd 服务（master/worker/api/alert）
+- `Install_DolphinScheduler_PseudoCluster()` — Pseudo-Cluster / 单个集群节点安装
+  1. 创建目录
+  2. 解压安装包（已解压则跳过，但仍重新配置，保证幂等且可修复失败的安装）
+  3. 安装 MySQL JDBC 驱动（如使用 MySQL）
+  4. 配置环境变量
+  5. 配置 install_env.sh
+  6. 配置 application.yaml
+  7. 初始化数据库（skip_db_init=y 时跳过，schema 只在首节点初始化一次）
+  8. 设置目录权限
+  9. 按 node_roles 安装 systemd 服务
+  - 任一步骤失败即返回非 0，不再继续安装服务
 
 - `Configure_Env_Standalone()` — 配置 Standalone 环境
 - `Configure_Env_PseudoCluster()` — 配置 Pseudo-Cluster 环境
@@ -244,22 +248,27 @@ zookeeper_ver=3.9.3
 - `Install_MySQL_JDBC()` — 安装 MySQL JDBC 驱动到各模块
 - `Init_Database()` — 初始化数据库
 - `Install_Standalone_Service()` — 安装 Standalone systemd 服务
-- `Install_PseudoCluster_Services()` — 安装 Pseudo-Cluster systemd 服务
+- `Installed_Cluster_Roles()` — 列出本节点已安装服务单元的角色
+- `Write_Service_Unit()` — 生成单个 systemd 服务单元
+- `Install_PseudoCluster_Services()` — 按角色安装 systemd 服务（非本节点角色的单元会被停用并删除）
 - `Start_Standalone()` — 启动 Standalone 服务
-- `Start_PseudoCluster()` — 启动 Pseudo-Cluster 服务
+- `Start_PseudoCluster()` — 按角色启动服务，失败时打印 journalctl 并返回非 0
 - `Uninstall_DolphinScheduler()` — 卸载 DolphinScheduler
 
 ### 8. `include/cluster.sh` — 集群部署模块
 
-**功能**: 多节点集群部署逻辑
+**功能**: 多节点、按角色的集群部署逻辑
 
 **要求**:
-- `Deploy_Cluster()` — 集群模式部署
-- `Check_SSH_Connectivity()` — 检测 SSH 连通性
-- `Deploy_To_Node()` — 部署到单个节点
-- `Start_Cluster()` — 启动集群服务
-- `Stop_Cluster()` — 停止集群服务
-- `Show_Cluster_Status()` — 显示集群状态
+- `Is_Local_Node()` / `In_Node_List()` — 节点归属判断（workers 支持 ip:group 格式）
+- `Get_Node_Roles()` — 由 masters/workers/api_servers/alert_server 推导某节点的角色列表
+- `Remote_Target()` / `Remote_Cmd()` — 以 remote_ssh_user 连接，非 root 时自动加 sudo
+- `Deploy_Cluster()` — 集群模式部署：校验角色配置 → 检查 SSH → 逐节点部署（首节点初始化 schema），任一节点失败即中止
+- `Check_SSH_Connectivity()` / `Test_SSH()` / `Distribute_SSH_Key()` — 检测 SSH 连通性，必要时一次性下发公钥
+- `Deploy_To_Node()` — 部署到单个节点（远端以 `--deploy_mode node --roles ...` 执行，只安装不启动）
+- `Systemctl_On_Node()` — 按角色在指定节点上执行 systemctl
+- `Start_Cluster()` / `Stop_Cluster()` — 按角色启停集群服务
+- `Show_Cluster_Status_Full()` — 按角色显示集群状态
 
 ### 9. `include/upgrade_dolphinscheduler.sh` — 升级模块
 
@@ -305,23 +314,25 @@ zookeeper_ver=3.9.3
   - `--help, -h` — 显示帮助
   - `--version, -v` — 显示版本
   - `--ds_ver [1-3]` — DolphinScheduler 版本选择
-  - `--deploy_mode [mode]` — 部署模式
+  - `--deploy_mode [mode]` — 部署模式（standalone/pseudo-cluster/cluster，内部另有 node）
   - `--download_only` — 仅下载不安装
   - `--quiet, -q` — 静默模式
   - `--status` — 显示集群状态
+  - `--roles [list]` — 内部选项：本节点角色列表（master,worker,api,alert）
+  - `--skip_db_init` — 内部选项：不初始化共享的元数据库 schema
 - 无参数时显示交互式菜单
 - 有参数时静默执行
 - 安装流程：
   1. 选择版本
-  2. 选择部署模式
-  3. 检查环境
+  2. 选择部署模式、解析角色
+  3. 检查环境（sudo 配置失败即退出）
   4. 检查 Java
-  5. 检查外部依赖（ZooKeeper/数据库）
+  5. 检查外部依赖（ZooKeeper/数据库）—— 数据库不可用即退出，并打印所需授权 SQL
   6. 下载安装包
-  7. 检查端口
-  8. 执行安装
-  9. 启动服务
-  10. 显示安装摘要
+  7. 检查端口（cluster 模式下由各节点自行检查）
+  8. 执行安装（任一步失败即退出）
+  9. 启动服务（node 模式不启动，由控制节点统一启动）
+  10. 显示安装摘要（cluster 模式打印各节点角色）
 
 ### 12. `uninstall.sh` — 卸载主入口
 
@@ -573,9 +584,15 @@ vim options.conf
 # 1. 配置集群节点
 vim options.conf
 # 设置 ips, masters, workers, alert_server, api_servers
+# 设置 remote_ssh_user（默认 root），首次部署可填 ssh_password 用于一次性下发公钥
 
-# 2. 配置 SSH 免密
-./install.sh --deploy_mode cluster
+# 2. 确保数据库已对所有节点 IP 授权（每个节点都直连元数据库）
+
+# 3. 在控制节点执行，脚本按角色分发到各节点
+./install.sh --deploy_mode cluster --ds_ver 3
+
+# 4. 查看集群状态
+./install.sh --status
 ```
 
 ### 升级

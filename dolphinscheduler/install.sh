@@ -54,11 +54,15 @@ Show_Help() {
   --download_only             Download packages only, do not install
   --quiet, -q                 Non-interactive mode
   --status                    Show cluster status
+
+  Internal options (used when the cluster deployment drives a single node):
+  --roles [list]              Comma separated roles: master,worker,api,alert
+  --skip_db_init              Do not initialize the shared metadata schema
   "
 }
 
 ARG_NUM=$#
-TEMP=$(getopt -o hvVq --long help,version,ds_ver:,deploy_mode:,download_only,quiet,status -- "$@" 2>/dev/null)
+TEMP=$(getopt -o hvVq --long help,version,ds_ver:,deploy_mode:,roles:,skip_db_init,download_only,quiet,status -- "$@" 2>/dev/null)
 [ $? != 0 ] && echo "${CWARNING}ERROR: unknown argument! ${CEND}" && Show_Help && exit 1
 eval set -- "${TEMP}"
 
@@ -66,6 +70,8 @@ quiet_flag=n
 download_only_flag=n
 ds_ver_option=""
 deploy_mode_from_cli=n
+node_roles=""
+skip_db_init=n
 
 while :; do
   [ -z "$1" ] && break;
@@ -82,6 +88,12 @@ while :; do
     --deploy_mode)
       deploy_mode=$2; deploy_mode_from_cli=y; shift 2
       ;;
+    --roles)
+      node_roles=$2; shift 2
+      ;;
+    --skip_db_init)
+      skip_db_init=y; shift 1
+      ;;
     --download_only)
       download_only_flag=y; shift 1
       ;;
@@ -90,7 +102,11 @@ while :; do
       ;;
     --status)
       Detect_Network
-      Show_Cluster_Status
+      if [ "${deploy_mode}" == "cluster" ]; then
+        Show_Cluster_Status_Full
+      else
+        Show_Cluster_Status
+      fi
       exit 0
       ;;
     --)
@@ -147,7 +163,7 @@ Select_Deploy_Mode() {
   # If deploy_mode explicitly set via command line
   if [ "${deploy_mode_from_cli}" == "y" ]; then
     case "${deploy_mode}" in
-      standalone|pseudo-cluster|cluster) ;;
+      standalone|pseudo-cluster|cluster|node) ;;
       *)
         echo "${CFAILURE}Invalid deploy_mode: ${deploy_mode}${CEND}"
         echo "Valid: standalone, pseudo-cluster, cluster"
@@ -332,14 +348,21 @@ Configure_Ports_Interactive() {
     read -e -p "API Server port (default: ${api_port:-25333}): " input_api_port
     api_port=${input_api_port:-${api_port:-25333}}
 
-    read -e -p "Master Server port (default: ${master_port:-5678}): " input_master_port
-    master_port=${input_master_port:-${master_port:-5678}}
+    # Each server needs an RPC port plus a web port for actuator/metrics
+    read -e -p "Master RPC port (default: ${master_rpc_port:-5678}): " input_master_port
+    master_rpc_port=${input_master_port:-${master_rpc_port:-5678}}
+    read -e -p "Master web port (default: ${master_web_port:-$((master_rpc_port + 1))}): " input_master_web_port
+    master_web_port=${input_master_web_port:-${master_web_port:-$((master_rpc_port + 1))}}
 
-    read -e -p "Worker Server port (default: ${worker_port:-1234}): " input_worker_port
-    worker_port=${input_worker_port:-${worker_port:-1234}}
+    read -e -p "Worker RPC port (default: ${worker_rpc_port:-1234}): " input_worker_port
+    worker_rpc_port=${input_worker_port:-${worker_rpc_port:-1234}}
+    read -e -p "Worker web port (default: ${worker_web_port:-$((worker_rpc_port + 1))}): " input_worker_web_port
+    worker_web_port=${input_worker_web_port:-${worker_web_port:-$((worker_rpc_port + 1))}}
 
-    read -e -p "Alert Server port (default: ${alert_port:-50052}): " input_alert_port
-    alert_port=${input_alert_port:-${alert_port:-50052}}
+    read -e -p "Alert RPC port (default: ${alert_rpc_port:-50052}): " input_alert_port
+    alert_rpc_port=${input_alert_port:-${alert_rpc_port:-50052}}
+    read -e -p "Alert web port (default: ${alert_web_port:-$((alert_rpc_port + 1))}): " input_alert_web_port
+    alert_web_port=${input_alert_web_port:-${alert_web_port:-$((alert_rpc_port + 1))}}
   fi
 
   echo "${CSUCCESS}Port configuration completed.${CEND}"
@@ -425,9 +448,12 @@ Save_Configuration() {
   # Port configuration
   sed -i "s|^web_port=.*|web_port=${web_port}|" ${ds_dir}/options.conf
   sed -i "s|^api_port=.*|api_port=${api_port}|" ${ds_dir}/options.conf
-  sed -i "s|^master_port=.*|master_port=${master_port}|" ${ds_dir}/options.conf
-  sed -i "s|^worker_port=.*|worker_port=${worker_port}|" ${ds_dir}/options.conf
-  sed -i "s|^alert_port=.*|alert_port=${alert_port}|" ${ds_dir}/options.conf
+  sed -i "s|^master_rpc_port=.*|master_rpc_port=${master_rpc_port}|" ${ds_dir}/options.conf
+  sed -i "s|^master_web_port=.*|master_web_port=${master_web_port}|" ${ds_dir}/options.conf
+  sed -i "s|^worker_rpc_port=.*|worker_rpc_port=${worker_rpc_port}|" ${ds_dir}/options.conf
+  sed -i "s|^worker_web_port=.*|worker_web_port=${worker_web_port}|" ${ds_dir}/options.conf
+  sed -i "s|^alert_rpc_port=.*|alert_rpc_port=${alert_rpc_port}|" ${ds_dir}/options.conf
+  sed -i "s|^alert_web_port=.*|alert_web_port=${alert_web_port}|" ${ds_dir}/options.conf
 
   # Resource storage configuration
   sed -i "s|^resource_storage_type=.*|resource_storage_type=${resource_storage_type}|" ${ds_dir}/options.conf
@@ -469,9 +495,9 @@ Show_Config_Summary() {
   else
     echo "  Ports:"
     echo "    API:      ${api_port}"
-    echo "    Master:   ${master_port}"
-    echo "    Worker:   ${worker_port}"
-    echo "    Alert:    ${alert_port}"
+    echo "    Master:   ${master_rpc_port} (rpc) / ${master_web_port} (web)"
+    echo "    Worker:   ${worker_rpc_port} (rpc) / ${worker_web_port} (web)"
+    echo "    Alert:    ${alert_rpc_port} (rpc) / ${alert_web_port} (web)"
   fi
 
   if [ "${deploy_mode}" == "cluster" ]; then
@@ -480,6 +506,9 @@ Show_Config_Summary() {
     echo "    All:      ${ips}"
     echo "    Masters:  ${masters}"
     echo "    Workers:  ${workers}"
+    echo "    API:      ${api_servers}"
+    echo "    Alert:    ${alert_server}"
+    echo "    SSH as:   ${remote_ssh_user:-root}"
   fi
   echo ""
 }
@@ -511,22 +540,32 @@ Main() {
   # Select deployment mode
   Select_Deploy_Mode
 
+  # Roles: only meaningful for multi-process modes. An empty value means
+  # "all roles on this node", which is what pseudo-cluster does.
+  if [ "${deploy_mode}" == "pseudo-cluster" ]; then
+    node_roles="master,worker,api,alert"
+  fi
+  if [ "${deploy_mode}" == "node" ] && [ -z "${node_roles}" ]; then
+    echo "${CFAILURE}--roles is required when deploy_mode is 'node'.${CEND}"
+    exit 1
+  fi
+
   # Check environment
   echo ""
-  echo "${CMSG}[1/5] Checking environment...${CEND}"
+  echo "${CMSG}[1/6] Checking environment...${CEND}"
   Check_Deps
   Create_User
   Detect_Network
 
-  # Configure sudo for pseudo-cluster and cluster modes
+  # Configure sudo for the multi-process modes
   if [ "${deploy_mode}" != "standalone" ]; then
-    Configure_Sudo
+    Configure_Sudo || exit 1
     Configure_SSH
   fi
 
   # Check Java
   echo ""
-  echo "${CMSG}[2/5] Checking Java environment...${CEND}"
+  echo "${CMSG}[2/6] Checking Java environment...${CEND}"
   if ! Check_Java; then
     if [ "${quiet_flag}" == "y" ]; then
       Install_Java
@@ -548,7 +587,8 @@ Main() {
   fi
 
   # Interactive configuration for pseudo-cluster and cluster modes
-  if [ "${deploy_mode}" != "standalone" ] && [ "${quiet_flag}" != "y" ]; then
+  # ('node' is driven by the cluster deployment and never asks anything)
+  if [ "${deploy_mode}" != "standalone" ] && [ "${deploy_mode}" != "node" ] && [ "${quiet_flag}" != "y" ]; then
     echo ""
     echo "${CMSG}[2.5/6] Configuring external dependencies...${CEND}"
 
@@ -588,15 +628,20 @@ Main() {
       exit 1
     fi
 
-    # Check database connection
-    if [ -n "${db_password}" ]; then
-      if ! Check_Database; then
-        echo "${CWARNING}Database connection failed. Attempting to create database...${CEND}"
-        Create_Database
-      fi
-    else
+    # Check database connection. A database that cannot be reached from this node
+    # makes the whole installation useless, so this is a hard failure.
+    if [ -z "${db_password}" ]; then
       echo "${CFAILURE}Database password not configured!${CEND}"
       exit 1
+    fi
+
+    if ! Check_Database; then
+      echo "${CWARNING}Attempting to create database '${db_name}'...${CEND}"
+      if ! Create_Database || ! Check_Database; then
+        Print_DB_Access_Hint
+        echo "${CFAILURE}Database is not usable from this node (${local_ip}). Aborting.${CEND}"
+        exit 1
+      fi
     fi
   fi
 
@@ -617,10 +662,12 @@ Main() {
     exit 0
   fi
 
-  # Check ports
-  echo ""
-  echo "${CMSG}[5/6] Checking ports...${CEND}"
-  Check_Ports "${deploy_mode}" || exit 1
+  # Check ports (in cluster mode this is done per node during deployment)
+  if [ "${deploy_mode}" != "cluster" ]; then
+    echo ""
+    echo "${CMSG}[5/6] Checking ports...${CEND}"
+    Check_Ports "${deploy_mode}" || exit 1
+  fi
 
   # Install
   echo ""
@@ -628,18 +675,25 @@ Main() {
 
   case "${deploy_mode}" in
     standalone)
-      Install_DolphinScheduler_Standalone "${ds_ver}"
-      Start_Standalone
+      Install_DolphinScheduler_Standalone "${ds_ver}" || exit 1
+      Start_Standalone || exit 1
       ;;
 
     pseudo-cluster)
-      Install_DolphinScheduler_PseudoCluster "${ds_ver}"
-      Start_PseudoCluster
+      Install_DolphinScheduler_PseudoCluster "${ds_ver}" || exit 1
+      Start_PseudoCluster || exit 1
       ;;
 
     cluster)
-      Deploy_Cluster "${ds_ver}"
-      Start_Cluster
+      Deploy_Cluster "${ds_ver}" || exit 1
+      Start_Cluster || exit 1
+      ;;
+
+    node)
+      # Single node of a cluster: install and enable, the control node starts it
+      Install_DolphinScheduler_PseudoCluster "${ds_ver}" || exit 1
+      echo "${CSUCCESS}Node prepared (roles: ${node_roles}). Services will be started by the control node.${CEND}"
+      exit 0
       ;;
   esac
 
@@ -658,15 +712,29 @@ Main() {
     echo "  Service Management:"
     echo "    systemctl {start|stop|restart|status} dolphinscheduler-standalone"
   else
-    echo "  Web UI:     http://${local_ip}:${api_port}/dolphinscheduler/ui"
+    # The UI lives on the API server(s)
+    local ui_host="${local_ip}"
+    if [ "${deploy_mode}" == "cluster" ]; then
+      ui_host="${api_servers%%,*}"
+    fi
+    echo "  Web UI:     http://${ui_host}:${api_port}/dolphinscheduler/ui"
     echo "  Username:   admin"
     echo "  Password:   dolphinscheduler123"
     echo ""
-    echo "  Service Management:"
-    echo "    systemctl {start|stop|restart|status} dolphinscheduler-master"
-    echo "    systemctl {start|stop|restart|status} dolphinscheduler-worker"
-    echo "    systemctl {start|stop|restart|status} dolphinscheduler-api"
-    echo "    systemctl {start|stop|restart|status} dolphinscheduler-alert"
+
+    if [ "${deploy_mode}" == "cluster" ]; then
+      echo "  Node roles:"
+      for ip in ${ips//,/ }; do
+        echo "    ${ip}: $(Get_Node_Roles ${ip})"
+      done
+      echo ""
+      echo "  Cluster Management (from this node):"
+      echo "    ./install.sh --status"
+      echo ""
+    fi
+
+    echo "  Service Management (on each node, for its own roles):"
+    echo "    systemctl {start|stop|restart|status} dolphinscheduler-{master|worker|api|alert}"
   fi
   echo ""
 }

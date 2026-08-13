@@ -108,18 +108,15 @@ Upgrade_DolphinScheduler() {
   # Set ownership
   chown -R ${run_user}:${run_group} ${dolphinscheduler_install_dir}
 
-  # Start services
+  # Start services (only the roles installed on this node)
   echo "${CMSG}Starting DolphinScheduler services...${CEND}"
   if [ -f "/lib/systemd/system/dolphinscheduler-standalone.service" ]; then
     systemctl start dolphinscheduler-standalone
   else
-    systemctl start dolphinscheduler-master
-    sleep 3
-    systemctl start dolphinscheduler-worker
-    sleep 3
-    systemctl start dolphinscheduler-api
-    sleep 3
-    systemctl start dolphinscheduler-alert
+    for role in $(Installed_Cluster_Roles); do
+      systemctl start dolphinscheduler-${role}
+      sleep 3
+    done
   fi
 
   # Verify upgrade
@@ -214,17 +211,14 @@ Rollback_Upgrade() {
   # Set ownership
   chown -R ${run_user}:${run_group} ${dolphinscheduler_install_dir}
 
-  # Start services
+  # Start services (only the roles installed on this node)
   if [ -f "/lib/systemd/system/dolphinscheduler-standalone.service" ]; then
     systemctl start dolphinscheduler-standalone
   else
-    systemctl start dolphinscheduler-master
-    sleep 3
-    systemctl start dolphinscheduler-worker
-    sleep 3
-    systemctl start dolphinscheduler-api
-    sleep 3
-    systemctl start dolphinscheduler-alert
+    for role in $(Installed_Cluster_Roles); do
+      systemctl start dolphinscheduler-${role}
+      sleep 3
+    done
   fi
 
   echo "${CSUCCESS}Rollback completed!${CEND}"
