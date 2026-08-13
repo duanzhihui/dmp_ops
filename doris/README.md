@@ -18,7 +18,7 @@
 |------|---------|---------|---------|
 | 2.1.11 (LTS) | ✅ | ❌ | `apache-doris-2.1.11-bin-x64.tar.gz` |
 | 3.0.8 | ✅ | ✅ | `apache-doris-3.0.8-bin-x64.tar.gz` |
-| 4.1.1 (Latest) | ✅ | ✅ | `apache-doris-4.1.1-bin-x64.tar.gz` |
+| 4.1.3 (Latest) | ✅ | ✅ | `apache-doris-4.1.3-bin-x64.tar.gz` |
 
 > **注意**：所有版本的安装包内含 `fe/`、`be/`、`ms/`（ms 仅 3.x+）、`tools/` 子目录。
 
@@ -29,6 +29,7 @@
 - **Java**: JDK 8（Doris 2.x）/ JDK 17（Doris 3.x+）
 - **内存**: FE 建议 16GB+，BE 建议 32GB+
 - **磁盘**: FE 元数据建议 SSD，BE 数据盘根据数据量规划
+- **集群模式**: 部署节点需能以 `ssh_user`（默认 root）免密 SSH 到所有 FE/BE/MS/FDB 节点（`options.conf` 中的 `ssh_port`/`ssh_user`/`ssh_key_file`）
 
 ## 目录结构
 
@@ -72,9 +73,11 @@ doris/
 # 交互式安装
 bash install.sh
 
-# 非交互式安装（最新版本）
-bash install.sh --doris_ver 3 --quiet
+# 非交互式安装（最新版本 4.x）
+bash install.sh --doris_ver 4 --quiet
 ```
+
+> `--doris_ver` 使用**大版本号**：`2` → 2.1.x LTS，`3` → 3.0.x，`4` → 4.1.x；也可直接写完整版本号（如 `--doris_ver 3.0.8`）。
 
 ### 2. 存算一体集群
 
@@ -88,7 +91,7 @@ priority_networks=192.168.1.0/24
 
 执行部署：
 ```bash
-bash install.sh --doris_ver 3 --deploy_mode integrated
+bash install.sh --doris_ver 4 --deploy_mode integrated
 ```
 
 ### 3. 存算分离集群（3.x+ 专属）
@@ -113,21 +116,21 @@ s3_bucket=doris-storage
 
 执行部署：
 ```bash
-bash install.sh --doris_ver 3 --deploy_mode separated
+bash install.sh --doris_ver 4 --deploy_mode separated
 ```
 
 ### 4. 单组件安装
 
 ```bash
-bash install.sh --fe_only --doris_ver 3
-bash install.sh --be_only --doris_ver 3
-bash install.sh --ms_only --doris_ver 3   # Meta Service
+bash install.sh --fe_only --doris_ver 4
+bash install.sh --be_only --doris_ver 4
+bash install.sh --ms_only --doris_ver 4   # Meta Service
 ```
 
 ### 5. 仅下载安装包
 
 ```bash
-bash install.sh --doris_ver 3 --download_only
+bash install.sh --doris_ver 4 --download_only
 ```
 
 ## 集群管理

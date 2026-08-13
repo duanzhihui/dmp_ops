@@ -125,15 +125,19 @@ Start_MS() {
     su - ${run_user} -s /bin/bash -c "${ms_install_dir}/bin/start.sh --daemon"
   fi
 
-  # Wait and check status
-  sleep 5
-  if ps aux | grep -v grep | grep -q "doris_cloud\|meta_service\|${ms_install_dir}"; then
-    echo "${CSUCCESS}Meta Service started successfully!${CEND}"
-    return 0
-  else
-    echo "${CFAILURE}Meta Service start failed! Check log: ${ms_log_dir}/${CEND}"
-    return 1
-  fi
+  # Wait and check status, retry for up to 60s
+  local retry=0
+  while [ ${retry} -lt 12 ]; do
+    if MS_Process_Alive; then
+      echo "${CSUCCESS}Meta Service started successfully!${CEND}"
+      return 0
+    fi
+    sleep 5
+    retry=$((retry + 1))
+  done
+
+  echo "${CFAILURE}Meta Service start failed! Check log: ${ms_log_dir}/${CEND}"
+  return 1
 }
 
 Stop_MS() {
@@ -145,8 +149,18 @@ Stop_MS() {
   echo "${CSUCCESS}Meta Service stopped.${CEND}"
 }
 
+MS_Process_Alive() {
+  local pid_file="${ms_install_dir}/bin/doris_cloud.pid"
+  if [ -f "${pid_file}" ]; then
+    local pid=$(cat ${pid_file} 2>/dev/null)
+    [ -n "${pid}" ] && kill -0 ${pid} 2>/dev/null && return 0
+  fi
+  ps aux | grep -v grep | grep -q "doris_cloud\|meta_service\|${ms_install_dir}" && return 0
+  return 1
+}
+
 Check_MS_Status() {
-  if ps aux | grep -v grep | grep -q "doris_cloud\|meta_service\|${ms_install_dir}"; then
+  if MS_Process_Alive; then
     echo "${CSUCCESS}Meta Service is running.${CEND}"
     return 0
   else

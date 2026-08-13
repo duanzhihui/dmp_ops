@@ -130,15 +130,19 @@ Start_BE() {
 
   su - ${run_user} -s /bin/bash -c "export JAVA_HOME=${JAVA_HOME} && ${be_install_dir}/bin/start_be.sh --daemon"
 
-  # Wait and check status
-  sleep 5
-  if ps aux | grep -v grep | grep -q "${be_install_dir}"; then
-    echo "${CSUCCESS}Doris BE started successfully!${CEND}"
-    return 0
-  else
-    echo "${CFAILURE}Doris BE start failed! Check log: ${be_log_dir}/be.log${CEND}"
-    return 1
-  fi
+  # BE loads tablet meta on startup, retry for up to 60s
+  local retry=0
+  while [ ${retry} -lt 12 ]; do
+    if BE_Process_Alive; then
+      echo "${CSUCCESS}Doris BE started successfully!${CEND}"
+      return 0
+    fi
+    sleep 5
+    retry=$((retry + 1))
+  done
+
+  echo "${CFAILURE}Doris BE start failed! Check log: ${be_log_dir}/be.INFO${CEND}"
+  return 1
 }
 
 Stop_BE() {
@@ -150,8 +154,18 @@ Stop_BE() {
   echo "${CSUCCESS}Doris BE stopped.${CEND}"
 }
 
+BE_Process_Alive() {
+  local pid_file="${be_install_dir}/bin/be.pid"
+  if [ -f "${pid_file}" ]; then
+    local pid=$(cat ${pid_file} 2>/dev/null)
+    [ -n "${pid}" ] && kill -0 ${pid} 2>/dev/null && return 0
+  fi
+  ps aux | grep -v grep | grep -q "${be_install_dir}/lib/doris_be" && return 0
+  return 1
+}
+
 Check_BE_Status() {
-  if ps aux | grep -v grep | grep -q "${be_install_dir}"; then
+  if BE_Process_Alive; then
     echo "${CSUCCESS}Doris BE is running.${CEND}"
     return 0
   else

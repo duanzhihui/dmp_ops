@@ -2,7 +2,7 @@
 # DorisStack - Apache Doris Cluster Deployment Tool
 # Main installation script
 #
-# Supports: Doris 2.1.11, 3.0.8, 4.1.1
+# Supports: Doris 2.x (LTS), 3.0.x, 4.1.x (see versions.txt)
 # Package:  apache-doris-<ver>-bin-<arch>.tar.gz (unified for ALL versions)
 #
 # Deployment modes:
@@ -19,7 +19,7 @@ clear
 printf "
 #######################################################################
 #       DorisStack - Apache Doris Cluster Deployment Tool             #
-#       Supports: Doris 2.1.11 / 3.0.8 / 4.1.1                      #
+#       Supports: Doris 2.1.x / 3.0.x / 4.1.x                        #
 #       Package:  Unified (FE+BE+MS in one tar.gz)                    #
 #       Modes:    standalone / integrated / separated                 #
 #       For more information: https://doris.apache.org                #
@@ -32,6 +32,8 @@ doris_dir=$(dirname "$(readlink -f $0)")
 pushd ${doris_dir} > /dev/null
 . ./versions.txt
 . ./options.conf
+# Runtime context propagated from the deploy node (cluster mode), overrides options.conf
+[ -f ./.deploy_env ] && . ./.deploy_env
 . ./include/color.sh
 . ./include/check_os.sh
 . ./include/download.sh
@@ -52,7 +54,8 @@ Show_Help() {
   echo "Usage: $0 command ...[parameters]....
   --help, -h                  Show this help message
   --version, -v               Show version info
-  --doris_ver [1-3]           Doris version: 1) ${doris_2_ver}  2) ${doris_3_ver}  3) ${doris_4_ver}
+  --doris_ver [2|3|4]         Doris major version: 2) ${doris_2_ver}  3) ${doris_3_ver}  4) ${doris_4_ver}
+                              (a full version string such as ${doris_3_ver} is also accepted)
   --deploy_mode [mode]        Deploy mode: standalone, integrated, separated
   --fe_only                   Install FE node only
   --be_only                   Install BE node only
@@ -126,15 +129,15 @@ done
 
 # Interactive version selection
 Select_Version() {
-  # Support both number (1-3) and version string (e.g. 2.1.11)
+  # Support both major version (2/3/4) and full version string (e.g. 2.1.11)
   if [ -n "${doris_ver_option}" ]; then
     case "${doris_ver_option}" in
-      1|${doris_2_ver}) doris_ver=${doris_2_ver} ;;
-      2|${doris_3_ver}) doris_ver=${doris_3_ver} ;;
-      3|${doris_4_ver}) doris_ver=${doris_4_ver} ;;
+      2|${doris_2_ver}) doris_ver=${doris_2_ver} ;;
+      3|${doris_3_ver}) doris_ver=${doris_3_ver} ;;
+      4|${doris_4_ver}) doris_ver=${doris_4_ver} ;;
       *)
         echo "${CWARNING}Invalid doris_ver: ${doris_ver_option}${CEND}"
-        echo "Valid: 1(${doris_2_ver}), 2(${doris_3_ver}), 3(${doris_4_ver})"
+        echo "Valid: 2(${doris_2_ver}), 3(${doris_3_ver}), 4(${doris_4_ver})"
         exit 1
         ;;
     esac
@@ -241,7 +244,7 @@ Main() {
   # Validate separated mode version requirement
   if [ "${deploy_mode}" == "separated" ] && [ "${doris_major_ver}" -lt 3 ]; then
     echo "${CFAILURE}Doris ${doris_ver} does not support 存算分离 mode!${CEND}"
-    echo "${CFAILURE}Separating storage-compute requires Doris 3.x+ (choose 3.0.8 or 4.1.1)${CEND}"
+    echo "${CFAILURE}Separating storage-compute requires Doris 3.x+ (choose ${doris_3_ver} or ${doris_4_ver})${CEND}"
     exit 1
   fi
 
@@ -290,10 +293,16 @@ Main() {
     exit 0
   fi
 
+  # Single-node install (standalone, or a single component driven by the deploy node)
+  local single_node_install=n
+  if [ "${fe_only_flag}" == "y" ] || [ "${be_only_flag}" == "y" ] || [ "${ms_only_flag}" == "y" ]; then
+    single_node_install=y
+  fi
+
   # Check ports (for standalone/single-component mode)
   echo ""
   echo "${CMSG}[4/5] Checking ports...${CEND}"
-  if [ "${deploy_mode}" == "standalone" ]; then
+  if [ "${single_node_install}" == "y" ]; then
     if [ "${fe_only_flag}" == "y" ] && [ "${be_only_flag}" == "y" ]; then
       Check_Ports "all" || exit 1
     elif [ "${fe_only_flag}" == "y" ]; then
@@ -311,46 +320,49 @@ Main() {
   echo ""
   echo "${CMSG}[5/5] Installing Doris ${doris_ver} (mode: ${deploy_mode})...${CEND}"
 
-  case "${deploy_mode}" in
-    standalone)
-      # FE only
+  # Component flags always mean "install these components on this node only",
+  # regardless of the cluster deploy_mode used for configuration generation.
+  if [ "${single_node_install}" == "y" ]; then
+    # MS first: FE in separated mode needs the meta service endpoint reachable
+    if [ "${ms_only_flag}" == "y" ]; then
+      Install_MS "${doris_ver}"
+      Start_MS || exit 1
+    fi
+
+    if [ "${fe_only_flag}" == "y" ]; then
+      Install_FE "${doris_ver}"
+      Start_FE "${helper_node}" || exit 1
+    fi
+
+    if [ "${be_only_flag}" == "y" ]; then
+      Install_BE "${doris_ver}"
+      Start_BE || exit 1
+
+      # Both FE and BE on the same node: register BE on the local FE
       if [ "${fe_only_flag}" == "y" ]; then
-        Install_FE "${doris_ver}"
-        Start_FE "${helper_node}"
+        local_ip=$(hostname -I | awk '{print $1}')
+        echo "${CMSG}Waiting for FE to be ready...${CEND}"
+        Wait_FE_Ready "${local_ip}" || exit 1
+        Register_BE "${local_ip}" "${local_ip}" "${be_heartbeat_service_port}"
       fi
+    fi
+  else
+    case "${deploy_mode}" in
+      integrated)
+        Deploy_Integrated_Cluster "${doris_ver}" || exit 1
+        ;;
+      separated)
+        Deploy_Separated_Cluster "${doris_ver}" || exit 1
+        ;;
+      *)
+        echo "${CFAILURE}Nothing to install: deploy_mode=${deploy_mode} without component flags.${CEND}"
+        exit 1
+        ;;
+    esac
+  fi
 
-      # MS only (存算分离 component, standalone install)
-      if [ "${ms_only_flag}" == "y" ]; then
-        Install_MS "${doris_ver}"
-        Start_MS
-      fi
-
-      # BE only
-      if [ "${be_only_flag}" == "y" ]; then
-        Install_BE "${doris_ver}"
-        Start_BE
-
-        # If standalone mode (both FE and BE on same node), register BE
-        if [ "${fe_only_flag}" == "y" ]; then
-          local_ip=$(hostname -I | awk '{print $1}')
-          echo "${CMSG}Waiting for FE to be ready...${CEND}"
-          sleep 10
-          Register_BE "${local_ip}" "${local_ip}" "${be_heartbeat_service_port}"
-        fi
-      fi
-      ;;
-
-    integrated)
-      Deploy_Integrated_Cluster "${doris_ver}"
-      ;;
-
-    separated)
-      Deploy_Separated_Cluster "${doris_ver}"
-      ;;
-  esac
-
-  # Print summary for standalone mode
-  if [ "${deploy_mode}" == "standalone" ]; then
+  # Print summary for single-node install
+  if [ "${single_node_install}" == "y" ]; then
     echo ""
     echo "${CSUCCESS}============================================${CEND}"
     echo "${CSUCCESS}  Installation Completed!${CEND}"

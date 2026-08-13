@@ -38,15 +38,20 @@ Deploy_Integrated_Cluster() {
   echo "${CMSG}FE nodes: ${#FE_ARRAY[@]}${CEND}"
   echo "${CMSG}BE nodes: ${#BE_ARRAY[@]}${CEND}"
 
+  local failed_nodes=""
+
   # Step 1: Deploy FE Master
   echo ""
   echo "${CMSG}[Step 1/4] Deploying FE Master on ${master_fe_host}...${CEND}"
-  Remote_Deploy_FE "${master_fe_host}" "${doris_ver}" ""
+  Remote_Deploy_FE "${master_fe_host}" "${doris_ver}" "" || {
+    echo "${CFAILURE}FE Master deployment failed, aborting cluster deployment.${CEND}"
+    return 1
+  }
 
   # Wait for FE Master to start
   Wait_FE_Ready "${master_fe_host}" || return 1
 
-  # Step 2: Deploy FE Followers
+  # Step 2: Deploy FE Followers (must be registered on Master before they start)
   if [ ${#FE_ARRAY[@]} -gt 1 ]; then
     echo ""
     echo "${CMSG}[Step 2/4] Deploying FE Follower nodes...${CEND}"
@@ -56,15 +61,19 @@ Deploy_Integrated_Cluster() {
       fe_port=${fe_port:-${fe_edit_log_port}}
 
       echo "${CMSG}  Registering FE Follower: ${fe_host}:${fe_port}${CEND}"
-      Register_FE_Follower "${master_fe_host}" "${fe_host}" "${fe_port}"
-      Remote_Deploy_FE "${fe_host}" "${doris_ver}" "${master_fe_host}:${master_fe_port}"
+      if ! Register_FE_Follower "${master_fe_host}" "${fe_host}" "${fe_port}"; then
+        failed_nodes="${failed_nodes} FE:${fe_host}"
+        continue
+      fi
+      Remote_Deploy_FE "${fe_host}" "${doris_ver}" "${master_fe_host}:${master_fe_port}" \
+        || failed_nodes="${failed_nodes} FE:${fe_host}"
     done
   else
     echo ""
     echo "${CMSG}[Step 2/4] Skipped (single FE node)${CEND}"
   fi
 
-  # Step 3: Deploy BE nodes
+  # Step 3: Deploy BE nodes (install first, register afterwards)
   echo ""
   echo "${CMSG}[Step 3/4] Deploying BE nodes...${CEND}"
   for be_node in "${BE_ARRAY[@]}"; do
@@ -72,15 +81,24 @@ Deploy_Integrated_Cluster() {
     local be_port=$(echo ${be_node} | awk -F: '{print $2}')
     be_port=${be_port:-${be_heartbeat_service_port}}
 
+    if ! Remote_Deploy_BE "${be_host}" "${doris_ver}"; then
+      failed_nodes="${failed_nodes} BE:${be_host}"
+      continue
+    fi
     echo "${CMSG}  Registering BE: ${be_host}:${be_port}${CEND}"
-    Register_BE "${master_fe_host}" "${be_host}" "${be_port}"
-    Remote_Deploy_BE "${be_host}" "${doris_ver}"
+    Register_BE "${master_fe_host}" "${be_host}" "${be_port}" \
+      || failed_nodes="${failed_nodes} BE:${be_host}"
   done
+
+  if [ -n "${failed_nodes}" ]; then
+    echo ""
+    echo "${CFAILURE}Some nodes failed to deploy:${failed_nodes}${CEND}"
+  fi
 
   # Step 4: Verify cluster
   echo ""
   echo "${CMSG}[Step 4/4] Verifying cluster...${CEND}"
-  sleep 10
+  Wait_Nodes_Alive "${master_fe_host}" "${#FE_ARRAY[@]}" "${#BE_ARRAY[@]}"
   Verify_Cluster "${master_fe_host}"
 
   Print_Cluster_Summary "${master_fe_host}" "integrated"
@@ -154,12 +172,23 @@ Deploy_Separated_Cluster() {
     echo "${CWARNING}Storage Vault not pre-configured. You can configure it after deployment.${CEND}"
   fi
 
+  # Generate the cloud cluster id ONCE, so every FE node shares the same value
+  if [ -z "${cloud_cluster_id}" ]; then
+    cloud_cluster_id=$(echo $(($((RANDOM << 15)) | $RANDOM)))
+    echo "${CMSG}Generated cloud cluster_id: ${cloud_cluster_id}${CEND}"
+  fi
+
+  local failed_nodes=""
+
   # Step 3: Deploy Meta Service
   echo ""
   echo "${CMSG}[Step 3/${total_steps}] Deploying Meta Service...${CEND}"
   for ms_node in "${MS_ARRAY[@]}"; do
     local ms_host=$(echo ${ms_node} | awk -F: '{print $1}')
-    Remote_Deploy_MS "${ms_host}" "${doris_ver}"
+    Remote_Deploy_MS "${ms_host}" "${doris_ver}" || {
+      echo "${CFAILURE}Meta Service deployment failed on ${ms_host}, aborting.${CEND}"
+      return 1
+    }
   done
 
   # Step 4: (Optional) Data recycling - skip for now
@@ -169,11 +198,14 @@ Deploy_Separated_Cluster() {
   # Step 5: Deploy FE Master
   echo ""
   echo "${CMSG}[Step 5/${total_steps}] Deploying FE Master on ${master_fe_host}...${CEND}"
-  Remote_Deploy_FE "${master_fe_host}" "${doris_ver}" ""
+  Remote_Deploy_FE "${master_fe_host}" "${doris_ver}" "" || {
+    echo "${CFAILURE}FE Master deployment failed, aborting cluster deployment.${CEND}"
+    return 1
+  }
 
   Wait_FE_Ready "${master_fe_host}" || return 1
 
-  # Step 6: Deploy FE Followers
+  # Step 6: Deploy FE Followers (must be registered on Master before they start)
   if [ ${#FE_ARRAY[@]} -gt 1 ]; then
     echo ""
     echo "${CMSG}[Step 6/${total_steps}] Deploying FE Follower nodes...${CEND}"
@@ -182,15 +214,19 @@ Deploy_Separated_Cluster() {
       local fe_port=$(echo ${FE_ARRAY[$i]} | awk -F: '{print $2}')
       fe_port=${fe_port:-${fe_edit_log_port}}
 
-      Register_FE_Follower "${master_fe_host}" "${fe_host}" "${fe_port}"
-      Remote_Deploy_FE "${fe_host}" "${doris_ver}" "${master_fe_host}:${master_fe_port}"
+      if ! Register_FE_Follower "${master_fe_host}" "${fe_host}" "${fe_port}"; then
+        failed_nodes="${failed_nodes} FE:${fe_host}"
+        continue
+      fi
+      Remote_Deploy_FE "${fe_host}" "${doris_ver}" "${master_fe_host}:${master_fe_port}" \
+        || failed_nodes="${failed_nodes} FE:${fe_host}"
     done
   else
     echo ""
     echo "${CMSG}[Step 6/${total_steps}] Skipped (single FE node)${CEND}"
   fi
 
-  # Step 7: Deploy BE nodes
+  # Step 7: Deploy BE nodes (install first, register afterwards)
   echo ""
   echo "${CMSG}[Step 7/${total_steps}] Deploying BE nodes...${CEND}"
   for be_node in "${BE_ARRAY[@]}"; do
@@ -198,9 +234,18 @@ Deploy_Separated_Cluster() {
     local be_port=$(echo ${be_node} | awk -F: '{print $2}')
     be_port=${be_port:-${be_heartbeat_service_port}}
 
-    Register_BE "${master_fe_host}" "${be_host}" "${be_port}"
-    Remote_Deploy_BE "${be_host}" "${doris_ver}"
+    if ! Remote_Deploy_BE "${be_host}" "${doris_ver}"; then
+      failed_nodes="${failed_nodes} BE:${be_host}"
+      continue
+    fi
+    Register_BE "${master_fe_host}" "${be_host}" "${be_port}" \
+      || failed_nodes="${failed_nodes} BE:${be_host}"
   done
+
+  if [ -n "${failed_nodes}" ]; then
+    echo ""
+    echo "${CFAILURE}Some nodes failed to deploy:${failed_nodes}${CEND}"
+  fi
 
   # Step 8: Create Storage Vault
   echo ""
@@ -208,7 +253,7 @@ Deploy_Separated_Cluster() {
   Create_Storage_Vault "${master_fe_host}"
 
   # Verify
-  sleep 10
+  Wait_Nodes_Alive "${master_fe_host}" "${#FE_ARRAY[@]}" "${#BE_ARRAY[@]}"
   Verify_Cluster "${master_fe_host}"
 
   Print_Cluster_Summary "${master_fe_host}" "separated"
@@ -282,73 +327,144 @@ Wait_FE_Ready() {
   return 1
 }
 
+# Wait until all FE/BE nodes report Alive, so validation does not run too early
+Wait_Nodes_Alive() {
+  local fe_ip=$1
+  local fe_expected=$2
+  local be_expected=$3
+  local retry=0
+  local fe_alive=0
+  local be_alive=0
+
+  echo "${CMSG}Waiting for cluster nodes to come online...${CEND}"
+  while [ ${retry} -lt 36 ]; do
+    fe_alive=$(mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show frontends\G" 2>/dev/null | grep -c "Alive: true")
+    be_alive=$(mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show backends\G" 2>/dev/null | grep -c "Alive: true")
+    if [ "${fe_alive}" -ge "${fe_expected}" ] && [ "${be_alive}" -ge "${be_expected}" ]; then
+      echo "${CSUCCESS}All nodes are alive (FE: ${fe_alive}/${fe_expected}, BE: ${be_alive}/${be_expected})${CEND}"
+      return 0
+    fi
+    sleep 5
+    retry=$((retry + 1))
+  done
+
+  echo "${CWARNING}Not all nodes are alive yet (FE: ${fe_alive}/${fe_expected}, BE: ${be_alive}/${be_expected})${CEND}"
+  return 1
+}
+
+Is_Local_Host() {
+  local host=$1
+  [ "${host}" == "127.0.0.1" ] || [ "${host}" == "localhost" ] && return 0
+  hostname -I | tr ' ' '\n' | grep -qx "${host}" && return 0
+  return 1
+}
+
+# Build ssh/scp option strings.
+# NOTE: ssh uses -p for the port, scp uses -P (scp's -p means "preserve times").
+Build_SSH_Opts() {
+  ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${ssh_port}"
+  scp_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -P ${ssh_port}"
+  if [ -n "${ssh_key_file}" ]; then
+    ssh_opts="${ssh_opts} -i ${ssh_key_file}"
+    scp_opts="${scp_opts} -i ${ssh_key_file}"
+  fi
+}
+
+# Runtime values that cannot be read from options.conf on the remote node
+# (auto-detected or generated during this deployment).
+Write_Deploy_Env() {
+  local env_file=$1
+  cat > ${env_file} << EOF
+# Auto-generated by DorisStack, do not edit. Sourced after options.conf.
+deploy_mode=${deploy_mode}
+fe_nodes=${fe_nodes}
+be_nodes=${be_nodes}
+ms_nodes=${ms_nodes}
+fdb_nodes=${fdb_nodes}
+fdb_cluster=${fdb_cluster}
+cloud_cluster_id=${cloud_cluster_id}
+EOF
+}
+
+Sync_Deploy_Files() {
+  local host=$1
+  local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
+
+  echo "${CMSG}  Copying package to ${host}...${CEND}"
+  if ! ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"; then
+    echo "${CFAILURE}  Cannot connect to ${ssh_user}@${host}:${ssh_port}!${CEND}"
+    return 1
+  fi
+  if ! scp ${scp_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/; then
+    echo "${CFAILURE}  Failed to copy deployment files to ${host}!${CEND}"
+    return 1
+  fi
+
+  local env_file=$(mktemp)
+  Write_Deploy_Env "${env_file}"
+  if ! scp ${scp_opts} ${env_file} ${ssh_user}@${host}:${remote_dir}/.deploy_env; then
+    rm -f ${env_file}
+    echo "${CFAILURE}  Failed to copy deployment context to ${host}!${CEND}"
+    return 1
+  fi
+  rm -f ${env_file}
+  return 0
+}
+
+Remote_Deploy_Component() {
+  local host=$1
+  local doris_ver=$2
+  local component=$3
+  local extra_args=$4
+  local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
+
+  Build_SSH_Opts
+  Sync_Deploy_Files "${host}" || return 1
+
+  echo "${CMSG}  Installing ${component^^} on ${host}...${CEND}"
+  if ! ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --${component}_only --doris_ver ${doris_ver} ${extra_args} --quiet"; then
+    echo "${CFAILURE}  ${component^^} installation failed on ${host}!${CEND}"
+    return 1
+  fi
+  return 0
+}
+
 Remote_Deploy_FE() {
   local host=$1
   local doris_ver=$2
   local helper_node=$3
-  local local_ip=$(hostname -I | awk '{print $1}')
 
-  if [ "${host}" == "${local_ip}" ] || [ "${host}" == "127.0.0.1" ] || [ "${host}" == "localhost" ]; then
+  if Is_Local_Host "${host}"; then
     Install_FE "${doris_ver}"
-    Start_FE "${helper_node}"
+    Start_FE "${helper_node}" || return 1
   else
-    local ssh_opts="-o StrictHostKeyChecking=no -p ${ssh_port}"
-    [ -n "${ssh_key_file}" ] && ssh_opts="${ssh_opts} -i ${ssh_key_file}"
-    local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
-
-    echo "${CMSG}  Copying package to ${host}...${CEND}"
-    ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"
-    scp ${ssh_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/
-
     local extra_args=""
-    [ -n "${helper_node}" ] && extra_args="--helper '${helper_node}'"
-
-    echo "${CMSG}  Installing FE on ${host}...${CEND}"
-    ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --fe_only --doris_ver ${doris_ver} ${extra_args} --quiet"
+    [ -n "${helper_node}" ] && extra_args="--helper ${helper_node}"
+    Remote_Deploy_Component "${host}" "${doris_ver}" "fe" "${extra_args}" || return 1
   fi
 }
 
 Remote_Deploy_BE() {
   local host=$1
   local doris_ver=$2
-  local local_ip=$(hostname -I | awk '{print $1}')
 
-  if [ "${host}" == "${local_ip}" ] || [ "${host}" == "127.0.0.1" ] || [ "${host}" == "localhost" ]; then
+  if Is_Local_Host "${host}"; then
     Install_BE "${doris_ver}"
-    Start_BE
+    Start_BE || return 1
   else
-    local ssh_opts="-o StrictHostKeyChecking=no -p ${ssh_port}"
-    [ -n "${ssh_key_file}" ] && ssh_opts="${ssh_opts} -i ${ssh_key_file}"
-    local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
-
-    echo "${CMSG}  Copying package to ${host}...${CEND}"
-    ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"
-    scp ${ssh_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/
-
-    echo "${CMSG}  Installing BE on ${host}...${CEND}"
-    ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --be_only --doris_ver ${doris_ver} --quiet"
+    Remote_Deploy_Component "${host}" "${doris_ver}" "be" "" || return 1
   fi
 }
 
 Remote_Deploy_MS() {
   local host=$1
   local doris_ver=$2
-  local local_ip=$(hostname -I | awk '{print $1}')
 
-  if [ "${host}" == "${local_ip}" ] || [ "${host}" == "127.0.0.1" ] || [ "${host}" == "localhost" ]; then
+  if Is_Local_Host "${host}"; then
     Install_MS "${doris_ver}"
-    Start_MS
+    Start_MS || return 1
   else
-    local ssh_opts="-o StrictHostKeyChecking=no -p ${ssh_port}"
-    [ -n "${ssh_key_file}" ] && ssh_opts="${ssh_opts} -i ${ssh_key_file}"
-    local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
-
-    echo "${CMSG}  Copying package to ${host}...${CEND}"
-    ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"
-    scp ${ssh_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/
-
-    echo "${CMSG}  Installing MS on ${host}...${CEND}"
-    ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --ms_only --doris_ver ${doris_ver} --quiet"
+    Remote_Deploy_Component "${host}" "${doris_ver}" "ms" "" || return 1
   fi
 }
 
@@ -362,8 +478,15 @@ Verify_Cluster() {
   echo "${CMSG}Checking BE status...${CEND}"
   mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show backends\G"
 
-  # Simple write/read test
+  # Simple write/read test (needs at least one live BE)
   echo ""
+  local be_alive=$(mysql -uroot -P${fe_query_port} -h${fe_ip} -e "show backends\G" 2>/dev/null | grep -c "Alive: true")
+  if [ "${be_alive}" -lt 1 ]; then
+    echo "${CFAILURE}No live BE node, skipping validation test.${CEND}"
+    echo "${CFAILURE}Check BE logs on the backend nodes: ${be_log_dir}/be.INFO${CEND}"
+    return 1
+  fi
+
   echo "${CMSG}Running cluster validation test...${CEND}"
   mysql -uroot -P${fe_query_port} -h${fe_ip} << EOF
 CREATE DATABASE IF NOT EXISTS doris_test;

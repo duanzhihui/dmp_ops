@@ -188,15 +188,19 @@ Start_FE() {
     su - ${run_user} -s /bin/bash -c "export JAVA_HOME=${JAVA_HOME} && ${fe_install_dir}/bin/start_fe.sh --daemon"
   fi
 
-  # Wait and check status
-  sleep 5
-  if ps aux | grep -v grep | grep -q "DorisFeProcess\|PaloFe\|fe.pid"; then
-    echo "${CSUCCESS}Doris FE started successfully!${CEND}"
-    return 0
-  else
-    echo "${CFAILURE}Doris FE start failed! Check log: ${fe_log_dir}/fe.log${CEND}"
-    return 1
-  fi
+  # FE needs some time to bootstrap the JVM, retry for up to 60s
+  local retry=0
+  while [ ${retry} -lt 12 ]; do
+    if FE_Process_Alive; then
+      echo "${CSUCCESS}Doris FE started successfully!${CEND}"
+      return 0
+    fi
+    sleep 5
+    retry=$((retry + 1))
+  done
+
+  echo "${CFAILURE}Doris FE start failed! Check log: ${fe_log_dir}/fe.log${CEND}"
+  return 1
 }
 
 Stop_FE() {
@@ -208,8 +212,20 @@ Stop_FE() {
   echo "${CSUCCESS}Doris FE stopped.${CEND}"
 }
 
+# FE main class since 2.x is org.apache.doris.DorisFE; the pid file is the
+# authoritative source (it is also what the systemd unit uses).
+FE_Process_Alive() {
+  local pid_file="${fe_install_dir}/bin/fe.pid"
+  if [ -f "${pid_file}" ]; then
+    local pid=$(cat ${pid_file} 2>/dev/null)
+    [ -n "${pid}" ] && kill -0 ${pid} 2>/dev/null && return 0
+  fi
+  ps aux | grep -v grep | grep -q "org.apache.doris.DorisFE\|${fe_install_dir}/lib" && return 0
+  return 1
+}
+
 Check_FE_Status() {
-  if ps aux | grep -v grep | grep -q "${fe_install_dir}"; then
+  if FE_Process_Alive; then
     echo "${CSUCCESS}Doris FE is running.${CEND}"
     return 0
   else
