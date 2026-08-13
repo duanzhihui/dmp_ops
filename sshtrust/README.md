@@ -221,13 +221,13 @@ EOF
 
 ### 密码文件格式
 
-`--password-file` 每行一个密码，按主机顺序对应，`#` 开头为注释：
+`--password-file` 每行一个密码，按主机顺序对应。**仅整行以 `#` 开头才视为注释**，密码中的 `#` 是合法字符（不会被截断）：
 
 ```
-# passwords.txt
-MyPass123          # 对应第1台主机
-AnotherPass456     # 对应第2台主机
-ThirdPass789       # 对应第3台主机
+# passwords.txt — 整行 # 开头才是注释
+MyPass123
+Another#Pass456    # 注意：行内 # 是密码的一部分，不会被删除
+ThirdPass789
 ```
 
 ### 密码安全

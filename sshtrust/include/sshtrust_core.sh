@@ -174,8 +174,12 @@ Add_Trust() {
     fi
     cli_passwords=()
     while IFS= read -r line || [ -n "$line" ]; do
-      line=$(echo "${line}" | sed 's/#.*//' | xargs)
+      # 仅跳过整行以 # 开头的注释行和空行；
+      # 行内的 # 是密码合法字符，不能删除（否则含#的密码会被截断）
+      line="${line#"${line%%[![:space:]]*}"}"   # 去掉行首空白
+      line="${line%"${line##*[![:space:]]}"}"   # 去掉行尾空白
       [ -z "${line}" ] && continue
+      [[ "${line}" == \#* ]] && continue
       cli_passwords+=("${line}")
     done < "${cli_password_file}"
     echo "${CMSG}Loaded ${#cli_passwords[@]} passwords from file${CEND}"
