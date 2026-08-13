@@ -43,10 +43,12 @@ Get_Local_PubKey() {
 
 # 保存配置到 options.conf
 Save_Config() {
-  sed -i "s@^trust_hosts=.*@trust_hosts=${trust_hosts}@" "${script_dir}/options.conf"
-  sed -i "s@^trust_mode=.*@trust_mode=${trust_mode}@" "${script_dir}/options.conf"
-  sed -i "s@^ssh_user=.*@ssh_user=${ssh_user}@" "${script_dir}/options.conf"
-  sed -i "s@^ssh_port=.*@ssh_port=${ssh_port}@" "${script_dir}/options.conf"
+  # trust_hosts 含空格，必须加引号，否则 source 时后续 IP 会被当成命令执行
+  # 使用 | 作为 sed 分隔符，避免 trust_hosts 中的 @ (user@host) 冲突
+  sed -i "s|^trust_hosts=.*|trust_hosts=\"${trust_hosts}\"|" "${script_dir}/options.conf"
+  sed -i "s|^trust_mode=.*|trust_mode=${trust_mode}|" "${script_dir}/options.conf"
+  sed -i "s|^ssh_user=.*|ssh_user=${ssh_user}|" "${script_dir}/options.conf"
+  sed -i "s|^ssh_port=.*|ssh_port=${ssh_port}|" "${script_dir}/options.conf"
 }
 
 # 检查主机是否已在 trust_hosts 列表中
@@ -114,13 +116,17 @@ Add_Trust_Single() {
     return 0
   fi
 
-  # 使用 sshpass + ssh-copy-id 分发公钥
-  sshpass -p "${password}" ssh-copy-id -p ${remote_port} \
+  # 使用 sshpass + ssh-copy-id 分发公钥（捕获 stderr 供失败时诊断）
+  local copy_err
+  copy_err=$(sshpass -p "${password}" ssh-copy-id -p ${remote_port} \
     -o StrictHostKeyChecking=no \
-    ${remote_user}@${remote_host} 2>/dev/null
+    ${remote_user}@${remote_host} 2>&1)
+  local copy_rc=$?
 
-  if [ $? -ne 0 ]; then
+  if [ ${copy_rc} -ne 0 ]; then
     echo "${CFAILURE}Failed to copy SSH key to ${remote_user}@${remote_host}${CEND}"
+    # 输出真实错误原因，便于定位（密码错误/网络不通/端口错误等）
+    [ -n "${copy_err}" ] && echo "  Reason: ${copy_err}" >&2
     return 1
   fi
 
