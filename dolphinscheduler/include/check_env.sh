@@ -21,10 +21,6 @@ Check_Deps() {
     if ! command -v tar > /dev/null 2>&1; then
       deps_to_install="${deps_to_install} tar"
     fi
-    # sshpass is only needed to distribute SSH keys non-interactively
-    if [ "${deploy_mode}" == "cluster" ] && [ -n "${ssh_password}" ] && ! command -v sshpass > /dev/null 2>&1; then
-      deps_to_install="${deps_to_install} sshpass"
-    fi
 
     if [ -n "${deps_to_install}" ]; then
       echo "${CMSG}Installing dependencies:${deps_to_install}${CEND}"
@@ -40,9 +36,6 @@ Check_Deps() {
     fi
     if ! command -v tar > /dev/null 2>&1; then
       deps_to_install="${deps_to_install} tar"
-    fi
-    if [ "${deploy_mode}" == "cluster" ] && [ -n "${ssh_password}" ] && ! command -v sshpass > /dev/null 2>&1; then
-      deps_to_install="${deps_to_install} sshpass"
     fi
 
     if [ -n "${deps_to_install}" ]; then
@@ -66,14 +59,6 @@ Create_User() {
   else
     echo "${CMSG}User ${run_user} already exists.${CEND}"
   fi
-}
-
-# SSH options used for all non-interactive connections between cluster nodes
-SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
-
-# Run a command as the deploy user (login shell, so ~/.ssh is resolved correctly)
-Run_As_Deploy_User() {
-  su - ${run_user} -c "$1"
 }
 
 # Configure sudo privileges for DolphinScheduler user

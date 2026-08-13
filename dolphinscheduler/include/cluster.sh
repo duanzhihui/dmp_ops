@@ -7,11 +7,23 @@
 # options.conf. The metadata schema is shared, so it is initialized exactly once
 # (on the first node of the ips list).
 #
-# Remote nodes are reached as ${remote_ssh_user} (default: root), because the
-# deploy user does not necessarily exist on a fresh node yet.
+# Remote nodes are reached as ${ssh_user} (default: root) over passwordless SSH,
+# which is expected to be configured beforehand. The deploy user is created by
+# this script on each node, so it cannot be used to bootstrap a fresh node.
 
 # Staging directory used on remote nodes
 remote_stage_dir="/tmp/dolphinscheduler-deploy"
+
+# Build ssh/scp option strings.
+# NOTE: ssh uses -p for the port, scp uses -P (scp's -p means "preserve times").
+Build_SSH_Opts() {
+  ssh_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -p ${ssh_port}"
+  scp_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -P ${ssh_port}"
+  if [ -n "${ssh_key_file}" ]; then
+    ssh_opts="${ssh_opts} -i ${ssh_key_file}"
+    scp_opts="${scp_opts} -i ${ssh_key_file}"
+  fi
+}
 
 # Return 0 if the given address refers to this machine
 Is_Local_Node() {
@@ -56,12 +68,12 @@ Get_Node_Roles() {
 
 # Build the ssh/scp target for a node
 Remote_Target() {
-  echo "${remote_ssh_user:-root}@$1"
+  echo "${ssh_user:-root}@$1"
 }
 
 # Wrap a remote command with sudo when not connecting as root
 Remote_Cmd() {
-  if [ "${remote_ssh_user:-root}" == "root" ]; then
+  if [ "${ssh_user:-root}" == "root" ]; then
     echo "$1"
   else
     echo "sudo -n bash -c '$1'"
@@ -120,7 +132,7 @@ Deploy_Cluster() {
   echo "${CSUCCESS}Cluster deployment completed!${CEND}"
 }
 
-# Check SSH connectivity to all remote nodes, distributing the key if needed
+# Check passwordless SSH connectivity to all remote nodes
 Check_SSH_Connectivity() {
   echo "${CMSG}Checking SSH connectivity to all nodes...${CEND}"
 
@@ -136,14 +148,8 @@ Check_SSH_Connectivity() {
 
     if Test_SSH "${ip}"; then
       echo "${CSUCCESS}SSH to ${ip} OK${CEND}"
-      continue
-    fi
-
-    echo "${CWARNING}Passwordless SSH to $(Remote_Target ${ip}) not available, trying to set it up...${CEND}"
-    if Distribute_SSH_Key "${ip}" && Test_SSH "${ip}"; then
-      echo "${CSUCCESS}SSH to ${ip} OK${CEND}"
     else
-      echo "${CFAILURE}SSH connection to $(Remote_Target ${ip}) failed!${CEND}"
+      echo "${CFAILURE}SSH connection to $(Remote_Target ${ip}):${ssh_port} failed!${CEND}"
       has_error=1
     fi
   done
@@ -151,10 +157,9 @@ Check_SSH_Connectivity() {
   if [ ${has_error} -eq 1 ]; then
     echo ""
     echo "${CFAILURE}Passwordless SSH is required for cluster deployment.${CEND}"
-    echo "${CFAILURE}Either set 'ssh_password' in options.conf (used once, needs sshpass),${CEND}"
-    echo "${CFAILURE}or run manually for each node:${CEND}"
-    echo "  ssh-keygen -t rsa -P '' -f ~/.ssh/id_rsa   # once on this node"
-    echo "  ssh-copy-id -p ${ssh_port} ${remote_ssh_user:-root}@<node-ip>"
+    echo "${CFAILURE}Configure it for each node, then run this script again:${CEND}"
+    echo "  ssh-copy-id -p ${ssh_port} ${ssh_user:-root}@<node-ip>"
+    echo "${CFAILURE}Check ssh_user / ssh_port / ssh_key_file in options.conf.${CEND}"
     return 1
   fi
 
@@ -165,41 +170,8 @@ Check_SSH_Connectivity() {
 # Test passwordless SSH to a node
 Test_SSH() {
   local ip=$1
-  ssh -o BatchMode=yes ${SSH_OPTS} -p ${ssh_port} "$(Remote_Target ${ip})" "echo ok" > /dev/null 2>&1
-}
-
-# Copy the local root SSH key to a node (one-time bootstrap)
-Distribute_SSH_Key() {
-  local ip=$1
-  local target=$(Remote_Target ${ip})
-
-  # Make sure we have a key to distribute
-  if [ ! -f /root/.ssh/id_rsa.pub ]; then
-    echo "${CMSG}Generating SSH key for root...${CEND}"
-    mkdir -p /root/.ssh && chmod 700 /root/.ssh
-    ssh-keygen -t rsa -P '' -f /root/.ssh/id_rsa -q || return 1
-  fi
-
-  if [ -n "${ssh_password}" ]; then
-    if ! command -v sshpass > /dev/null 2>&1; then
-      echo "${CFAILURE}ssh_password is set but sshpass is not installed.${CEND}"
-      return 1
-    fi
-    echo "${CMSG}Copying SSH key to ${target} using ssh_password...${CEND}"
-    sshpass -p "${ssh_password}" ssh-copy-id -o StrictHostKeyChecking=accept-new \
-      -p ${ssh_port} -i /root/.ssh/id_rsa.pub "${target}" > /dev/null 2>&1
-    return $?
-  fi
-
-  # No stored password: only possible interactively
-  if [ -t 0 ]; then
-    echo "${CMSG}Copying SSH key to ${target} (password required once)...${CEND}"
-    ssh-copy-id -o StrictHostKeyChecking=accept-new -p ${ssh_port} -i /root/.ssh/id_rsa.pub "${target}"
-    return $?
-  fi
-
-  echo "${CFAILURE}Cannot set up passwordless SSH to ${target} non-interactively.${CEND}"
-  return 1
+  Build_SSH_Opts
+  ssh -o BatchMode=yes ${ssh_opts} "$(Remote_Target ${ip})" "echo ok" > /dev/null 2>&1
 }
 
 # Deploy to a single node
@@ -219,25 +191,26 @@ Deploy_To_Node() {
 
   echo "${CMSG}Deploying to remote node ${target_ip} (roles: ${roles})...${CEND}"
 
+  Build_SSH_Opts
   local target=$(Remote_Target ${target_ip})
   local skip_flag=""
   [ "${skip_db_init}" == "y" ] && skip_flag="--skip_db_init"
 
   # Stage a clean copy of this toolkit (including the downloaded packages)
-  if ! ssh ${SSH_OPTS} -p ${ssh_port} "${target}" \
+  if ! ssh ${ssh_opts} "${target}" \
       "$(Remote_Cmd "rm -rf ${remote_stage_dir} && mkdir -p ${remote_stage_dir}")"; then
     echo "${CFAILURE}Failed to prepare ${remote_stage_dir} on ${target_ip}!${CEND}"
     return 1
   fi
 
-  if ! scp ${SSH_OPTS} -P ${ssh_port} -r ${ds_dir}/. "${target}:${remote_stage_dir}/"; then
+  if ! scp ${scp_opts} -r ${ds_dir}/. "${target}:${remote_stage_dir}/"; then
     echo "${CFAILURE}Failed to copy deployment files to ${target_ip}!${CEND}"
     return 1
   fi
 
   # Execute installation on remote node ("node" mode installs without starting)
   local remote_install="cd ${remote_stage_dir} && bash install.sh --deploy_mode node --ds_ver ${ds_ver} --roles ${roles} ${skip_flag} --quiet"
-  if ! ssh ${SSH_OPTS} -p ${ssh_port} "${target}" "$(Remote_Cmd "${remote_install}")"; then
+  if ! ssh ${ssh_opts} "${target}" "$(Remote_Cmd "${remote_install}")"; then
     echo "${CFAILURE}Remote installation on ${target_ip} failed!${CEND}"
     return 1
   fi
@@ -261,7 +234,8 @@ Systemctl_On_Node() {
   if Is_Local_Node "${ip}"; then
     systemctl ${action} ${units}
   else
-    ssh ${SSH_OPTS} -p ${ssh_port} "$(Remote_Target ${ip})" "$(Remote_Cmd "systemctl ${action} ${units}")"
+    Build_SSH_Opts
+    ssh ${ssh_opts} "$(Remote_Target ${ip})" "$(Remote_Cmd "systemctl ${action} ${units}")"
   fi
 }
 
@@ -317,6 +291,7 @@ Show_Cluster_Status_Full() {
 
   local ips_array=(${ips//,/ })
   local ip roles role status
+  Build_SSH_Opts
 
   for ip in "${ips_array[@]}"; do
     roles=$(Get_Node_Roles "${ip}")
@@ -326,7 +301,7 @@ Show_Cluster_Status_Full() {
       if Is_Local_Node "${ip}"; then
         status=$(systemctl is-active dolphinscheduler-${role} 2>/dev/null)
       else
-        status=$(ssh -o BatchMode=yes ${SSH_OPTS} -p ${ssh_port} "$(Remote_Target ${ip})" \
+        status=$(ssh -o BatchMode=yes ${ssh_opts} "$(Remote_Target ${ip})" \
           "systemctl is-active dolphinscheduler-${role}" 2>/dev/null)
       fi
 

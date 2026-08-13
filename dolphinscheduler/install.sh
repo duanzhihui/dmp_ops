@@ -508,7 +508,7 @@ Show_Config_Summary() {
     echo "    Workers:  ${workers}"
     echo "    API:      ${api_servers}"
     echo "    Alert:    ${alert_server}"
-    echo "    SSH as:   ${remote_ssh_user:-root}"
+    echo "    SSH as:   ${ssh_user:-root}@<node>:${ssh_port}"
   fi
   echo ""
 }

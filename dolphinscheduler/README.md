@@ -54,12 +54,14 @@ Apache DolphinScheduler 集群部署工具
 自己所属角色的 systemd 服务。元数据库 schema 是共享的，只会在 `ips` 的**第一个节点**
 初始化一次。
 
-远端节点通过 `remote_ssh_user`（默认 `root`）连接——部署用户 `dolphinscheduler`
-是脚本在各节点上创建的，因此不能用它来引导一台全新的机器。首次部署若尚未配置免密：
+**前提**：控制节点能以 `ssh_user`（默认 `root`）免密 SSH 到所有节点，相关配置为
+`options.conf` 中的 `ssh_port` / `ssh_user` / `ssh_key_file`。部署用户
+`dolphinscheduler` 是脚本在各节点上创建的，因此不能用它来引导一台全新的机器。
+若尚未配置免密：
 
-- 在 `options.conf` 中填入 `ssh_password`（需要 `sshpass`，仅用于一次性下发公钥），或
-- 交互式运行安装脚本，按提示输入各节点密码，或
-- 自行执行 `ssh-copy-id -p 22 root@<节点IP>`
+```bash
+ssh-copy-id -p 22 root@<节点IP>
+```
 
 **数据库授权**：每个节点都会直连元数据库，所以账号必须对所有节点地址授权：
 
@@ -140,12 +142,13 @@ workers=localhost:default
 alert_server=localhost
 api_servers=localhost
 
-# 集群部署用的 SSH 账号（默认 root）及其密码（仅用于一次性下发公钥，可留空）
-remote_ssh_user=root
-ssh_password=
+# 集群部署用的 SSH 配置（需提前配置好免密）
+ssh_port=22
+ssh_user=root
+ssh_key_file=          # 留空表示使用 ssh_user 的默认密钥
 ```
 
-> 填写了 `db_password` / `ssh_password` 后建议 `chmod 600 options.conf`。
+> 填写了 `db_password` 后建议 `chmod 600 options.conf`。
 
 ## 服务管理
 

@@ -139,7 +139,7 @@
 - 部署模式：deploy_mode (standalone/pseudo-cluster/cluster)
 - 数据库配置：db_type, db_host, db_port, db_name, db_user, db_password
 - ZooKeeper 配置：zk_hosts
-- 集群配置：ips, ssh_port, masters, workers, alert_server, api_servers, remote_ssh_user, ssh_password
+- 集群配置：ips, masters, workers, alert_server, api_servers, ssh_port, ssh_user, ssh_key_file
 - 资源存储配置：resource_storage_type, resource_local_path, hdfs_*, s3_*
 - JAVA_HOME 配置
 - 备份配置：backup_dir, expired_days, backup_destination, backup_content
@@ -262,9 +262,10 @@ zookeeper_ver=3.9.3
 **要求**:
 - `Is_Local_Node()` / `In_Node_List()` — 节点归属判断（workers 支持 ip:group 格式）
 - `Get_Node_Roles()` — 由 masters/workers/api_servers/alert_server 推导某节点的角色列表
-- `Remote_Target()` / `Remote_Cmd()` — 以 remote_ssh_user 连接，非 root 时自动加 sudo
+- `Build_SSH_Opts()` — 由 ssh_port / ssh_key_file 组装 ssh_opts、scp_opts（注意 ssh 用 -p、scp 用 -P）
+- `Remote_Target()` / `Remote_Cmd()` — 以 ssh_user 连接，非 root 时自动加 sudo
 - `Deploy_Cluster()` — 集群模式部署：校验角色配置 → 检查 SSH → 逐节点部署（首节点初始化 schema），任一节点失败即中止
-- `Check_SSH_Connectivity()` / `Test_SSH()` / `Distribute_SSH_Key()` — 检测 SSH 连通性，必要时一次性下发公钥
+- `Check_SSH_Connectivity()` / `Test_SSH()` — 检测各节点免密 SSH 连通性（跳过本机），不通则中止并提示 ssh-copy-id
 - `Deploy_To_Node()` — 部署到单个节点（远端以 `--deploy_mode node --roles ...` 执行，只安装不启动）
 - `Systemctl_On_Node()` — 按角色在指定节点上执行 systemctl
 - `Start_Cluster()` / `Stop_Cluster()` — 按角色启停集群服务
@@ -584,7 +585,7 @@ vim options.conf
 # 1. 配置集群节点
 vim options.conf
 # 设置 ips, masters, workers, alert_server, api_servers
-# 设置 remote_ssh_user（默认 root），首次部署可填 ssh_password 用于一次性下发公钥
+# 设置 ssh_port / ssh_user / ssh_key_file，并提前配好 root 免密互信
 
 # 2. 确保数据库已对所有节点 IP 授权（每个节点都直连元数据库）
 
