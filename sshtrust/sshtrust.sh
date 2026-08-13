@@ -223,6 +223,7 @@ Show_Menu() {
 ARG_NUM=$#
 quiet_mode=0
 action=""
+mesh_flag=0
 hosts=()
 file_path=""
 override_user=""
@@ -276,7 +277,9 @@ while true; do
       shift
       ;;
     -m|--mesh)
-      action="mesh"
+      mesh_flag=1
+      # 仅当未指定其它 action 时，把 --mesh 作为独立动作（使用已配置的 trust_hosts）
+      [ -z "${action}" ] && action="mesh"
       shift
       ;;
     --init)
@@ -325,14 +328,22 @@ main() {
       Check_OS > /dev/null 2>&1
       Check_All || exit 1
       echo ""
-      Add_Trust "${hosts[@]}"
+      if [ ${mesh_flag} -eq 1 ]; then
+        Setup_Mesh "${hosts[@]}"
+      else
+        Add_Trust "${hosts[@]}"
+      fi
       exit $?
       ;;
     add-file)
       Check_OS > /dev/null 2>&1
       Check_All || exit 1
       echo ""
-      Add_Trust_From_File "${file_path}"
+      if [ ${mesh_flag} -eq 1 ]; then
+        Setup_Mesh_From_File "${file_path}"
+      else
+        Add_Trust_From_File "${file_path}"
+      fi
       exit $?
       ;;
     remove)

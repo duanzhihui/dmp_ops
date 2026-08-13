@@ -48,12 +48,21 @@ chmod +x sshtrust.sh
 # 检查互信连通性
 ./sshtrust.sh --check
 
-# 配置全互信（网状模式）
+# 配置全互信（网状模式，使用已配置的 trust_hosts）
 ./sshtrust.sh --mesh
+
+# 从文件导入主机并直接建立全互信（组合用法）
+./sshtrust.sh --mesh --add-file hosts.txt --quiet --password-file passwords.txt
+
+# 指定主机并直接建立全互信（组合用法）
+./sshtrust.sh --mesh --add 192.168.1.10 192.168.1.11 --quiet --password mypass
 
 # 仅初始化本机密钥对
 ./sshtrust.sh --init
 ```
+
+> `--mesh` 可作为修饰标志与 `--add` / `--add-file` 组合：先导入主机，再对这些主机执行全互信。
+> 单独使用 `--mesh` 时，则基于 `options.conf` 中已保存的 `trust_hosts` 执行。
 
 ## 目录结构
 
@@ -171,11 +180,12 @@ mesh 模式执行流程：
 ### 场景2：Hadoop 集群全互信
 
 ```bash
-# 先添加所有节点
-./sshtrust.sh --add 192.168.1.10 192.168.1.11 192.168.1.12
-
-# 配置全互信
+# 方式一：先添加节点，再配置全互信
+./sshtrust.sh --add 192.168.1.10 192.168.1.11 192.168.1.12 --quiet --password mypass
 ./sshtrust.sh --mesh
+
+# 方式二：一步到位（导入主机 + 全互信）
+./sshtrust.sh --mesh --add-file hosts.txt --quiet --password-file passwords.txt
 
 # 验证
 ./sshtrust.sh --check

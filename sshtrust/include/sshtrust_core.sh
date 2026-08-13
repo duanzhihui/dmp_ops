@@ -450,25 +450,74 @@ Check_Trust() {
   return ${fail_count}
 }
 
-# 全互信（mesh 模式）
-# 本机 → 所有远程主机 + 所有远程主机之间互相建立互信
-Setup_Mesh() {
-  echo "${CMSG}=== Setting up Mesh Trust (full mutual trust) ===${CEND}"
-  echo ""
+# 从文件导入主机列表并建立全互信（mesh）
+# 参数: $1=文件路径
+Setup_Mesh_From_File() {
+  local file=$1
 
-  if [ -z "${trust_hosts}" ]; then
-    echo "${CFAILURE}No trust hosts configured${CEND}"
-    echo "Please add hosts first using --add"
+  if [ -z "${file}" ]; then
+    echo "${CFAILURE}No file specified${CEND}"
     return 1
   fi
 
+  if [ ! -f "${file}" ]; then
+    echo "${CFAILURE}File not found: ${file}${CEND}"
+    return 1
+  fi
+
+  echo "${CMSG}=== Importing hosts from file: ${file} ===${CEND}"
+
+  local mesh_hosts=()
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=$(echo "${line}" | sed 's/#.*//' | xargs)
+    [ -z "${line}" ] && continue
+    mesh_hosts+=("${line}")
+  done < "${file}"
+
+  if [ ${#mesh_hosts[@]} -eq 0 ]; then
+    echo "${CWARNING}No valid hosts found in file${CEND}"
+    return 1
+  fi
+
+  echo "Found ${#mesh_hosts[@]} hosts in file"
+  echo ""
+
+  Setup_Mesh "${mesh_hosts[@]}"
+  return $?
+}
+
+# 全互信（mesh 模式）
+# 本机 → 所有远程主机 + 所有远程主机之间互相建立互信
+# 参数: 可选主机列表（为空时使用 options.conf 中的 trust_hosts）
+Setup_Mesh() {
+  local mesh_hosts=()
+  if [ $# -gt 0 ]; then
+    mesh_hosts=("$@")
+  else
+    if [ -z "${trust_hosts}" ]; then
+      echo "${CFAILURE}No trust hosts configured${CEND}"
+      echo "Please add hosts first using --add/--add-file, or use: --mesh --add-file FILE"
+      return 1
+    fi
+    for h in ${trust_hosts}; do
+      mesh_hosts+=("${h}")
+    done
+  fi
+
+  echo "${CMSG}=== Setting up Mesh Trust (full mutual trust) ===${CEND}"
+  echo ""
+
+  # 构建全量主机列表（含本机，去重）
   local all_hosts=()
-  # 将本机加入列表
   local local_ip=$(hostname -I 2>/dev/null | awk '{print $1}')
   if [ -n "${local_ip}" ]; then
     all_hosts+=("${ssh_user}@${local_ip}")
   fi
-  for h in ${trust_hosts}; do
+  for h in "${mesh_hosts[@]}"; do
+    Parse_Host "${h}"
+    [ -n "${local_ip}" ] && [ "${_parse_host}" == "${local_ip}" ] && continue
+    [ "${_parse_host}" == "127.0.0.1" ] && continue
+    [ "${_parse_host}" == "localhost" ] && continue
     all_hosts+=("${h}")
   done
 
@@ -476,46 +525,90 @@ Setup_Mesh() {
   echo "Total hosts in mesh: ${total_hosts}"
   echo ""
 
-  # 询问密码（用于在远程主机上执行命令）
-  local password=""
-  if [ "${quiet_mode}" -ne 1 ]; then
-    read -s -e -p "Enter SSH password for remote hosts: " password
-    echo ""
-  fi
+  # 阶段1: 本机 → 所有远程主机建立互信
+  # 密码按 mesh_hosts 原始顺序对应（跳过本机时同步跳过其密码索引，避免错位）
+  echo "${CMSG}=== Phase 1: Local → All remote hosts ===${CEND}"
 
-  if [ -z "${password}" ]; then
-    echo "${CFAILURE}Password is required for mesh setup${CEND}"
+  local mesh_password=""
+  if [ -n "${cli_password}" ]; then
+    mesh_password="${cli_password}"
+  elif [ -n "${cli_password_file}" ]; then
+    if [ ! -f "${cli_password_file}" ]; then
+      echo "${CFAILURE}Password file not found: ${cli_password_file}${CEND}"
+      return 1
+    fi
+    cli_passwords=()
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line#"${line%%[![:space:]]*}"}"
+      line="${line%"${line##*[![:space:]]}"}"
+      [ -z "${line}" ] && continue
+      [[ "${line}" == \#* ]] && continue
+      cli_passwords+=("${line}")
+    done < "${cli_password_file}"
+    echo "${CMSG}Loaded ${#cli_passwords[@]} passwords from file${CEND}"
+    if [ ${#cli_passwords[@]} -ne ${#mesh_hosts[@]} ]; then
+      echo "${CWARNING}Warning: ${#cli_passwords[@]} passwords for ${#mesh_hosts[@]} hosts (mismatch)${CEND}"
+    fi
+  elif [ "${quiet_mode}" -ne 1 ]; then
+    read -s -e -p "Enter SSH password for remote hosts: " mesh_password
+    echo ""
+  else
+    echo "${CFAILURE}No password provided. Use --password or --password-file in quiet mode.${CEND}"
     return 1
   fi
 
-  # 阶段1: 本机 → 所有远程主机建立互信
-  echo "${CMSG}=== Phase 1: Local → All remote hosts ===${CEND}"
+  # 遍历 mesh_hosts（保持原始顺序以对齐密码索引），跳过本机
   local phase1_hosts=()
-  for h in "${all_hosts[@]}"; do
+  local phase1_pwd_idx=()
+  local idx=0
+  for h in "${mesh_hosts[@]}"; do
     Parse_Host "${h}"
-    # 跳过本机
-    [ "${_parse_host}" == "${local_ip}" ] && continue
-    [ "${_parse_host}" == "127.0.0.1" ] && continue
-    [ "${_parse_host}" == "localhost" ] && continue
-    phase1_hosts+=("${h}")
+    local is_local=0
+    [ -n "${local_ip}" ] && [ "${_parse_host}" == "${local_ip}" ] && is_local=1
+    [ "${_parse_host}" == "127.0.0.1" ] && is_local=1
+    [ "${_parse_host}" == "localhost" ] && is_local=1
+    if [ ${is_local} -eq 0 ]; then
+      phase1_hosts+=("${h}")
+      phase1_pwd_idx+=("${idx}")
+    fi
+    idx=$((idx + 1))
   done
 
-  if [ ${#phase1_hosts[@]} -gt 0 ]; then
-    Add_Trust "${phase1_hosts[@]}" || true
-  fi
+  local p1_ok=0
+  local p1_fail=0
+  local i=0
+  for h in "${phase1_hosts[@]}"; do
+    if Add_Trust_Single "${h}" "${mesh_password}" 0 "${phase1_pwd_idx[$i]}"; then
+      p1_ok=$((p1_ok + 1))
+      if ! Host_In_List "${h}"; then
+        if [ -n "${trust_hosts}" ]; then
+          trust_hosts="${trust_hosts} ${h}"
+        else
+          trust_hosts="${h}"
+        fi
+      fi
+    else
+      p1_fail=$((p1_fail + 1))
+    fi
+    i=$((i + 1))
+    echo ""
+  done
+  [ ${p1_ok} -gt 0 ] && Save_Config
+  echo "  Phase 1 — Success: ${p1_ok}, Failed: ${p1_fail}"
   echo ""
 
-  # 阶段2: 在每台远程主机上生成密钥对
+  # 阶段2: 在每台远程主机上生成密钥对（复用 Phase 1 已建立的免密连接）
   echo "${CMSG}=== Phase 2: Generate key pairs on remote hosts ===${CEND}"
   for h in "${all_hosts[@]}"; do
     Parse_Host "${h}"
-    [ "${_parse_host}" == "${local_ip}" ] && continue
+    [ -n "${local_ip}" ] && [ "${_parse_host}" == "${local_ip}" ] && continue
     [ "${_parse_host}" == "127.0.0.1" ] && continue
     [ "${_parse_host}" == "localhost" ] && continue
 
     printf "  %-30s " "${_parse_user}@${_parse_host}:${_parse_port}"
 
-    sshpass -p "${password}" ssh -p ${_parse_port} -o StrictHostKeyChecking=no \
+    ssh -p ${_parse_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+      -o PasswordAuthentication=no -o BatchMode=yes \
       ${_parse_user}@${_parse_host} \
       "[ -f ~/.ssh/id_rsa.pub ] || { mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N '' -q; }" 2>/dev/null
 
