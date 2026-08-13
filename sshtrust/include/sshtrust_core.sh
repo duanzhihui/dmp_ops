@@ -654,12 +654,16 @@ Setup_Mesh() {
   # 逐台分发
   for target_h in "${all_hosts[@]}"; do
     Parse_Host "${target_h}"
-    local target_key="${_parse_user}@${_parse_host}:${_parse_port}"
+    # 保存 target 连接信息（内层循环的 Parse_Host 会覆盖 _parse_* 变量）
+    local target_user="${_parse_user}"
+    local target_host="${_parse_host}"
+    local target_port="${_parse_port}"
+    local target_key="${target_user}@${target_host}:${target_port}"
 
     # 跳过本机
-    [ "${_parse_host}" == "${local_ip}" ] && continue
-    [ "${_parse_host}" == "127.0.0.1" ] && continue
-    [ "${_parse_host}" == "localhost" ] && continue
+    [ "${target_host}" == "${local_ip}" ] && continue
+    [ "${target_host}" == "127.0.0.1" ] && continue
+    [ "${target_host}" == "localhost" ] && continue
 
     printf "  Distributing to %-30s\n" "${target_key}"
 
@@ -675,12 +679,12 @@ Setup_Mesh() {
 
       # 检查目标是否已有该公钥
       local key_prefix=$(echo "${pubkey}" | awk '{print $1, $2}')
-      local escaped_key=$(echo "${key_prefix}" | sed 's/[\/&]/\\&/g')
 
-      ssh -p ${_parse_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+      # 注意：必须连接 target 主机（而不是 source），把 source 的公钥写入 target 的 authorized_keys
+      ssh -p ${target_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
         -o PasswordAuthentication=no -o BatchMode=yes \
-        ${_parse_user}@${_parse_host} \
-        "grep -q '${key_prefix}' ~/.ssh/authorized_keys 2>/dev/null || echo '${pubkey}' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys" 2>/dev/null
+        ${target_user}@${target_host} \
+        "grep -qF '${key_prefix}' ~/.ssh/authorized_keys 2>/dev/null || echo '${pubkey}' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" 2>/dev/null
 
       if [ $? -eq 0 ]; then
         printf "    %-30s %s\n" "${source_key}" "${CSUCCESS}[OK]${CEND}"
