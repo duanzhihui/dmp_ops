@@ -2,7 +2,7 @@
 # Supported versions: 3.2.x, 3.3.x, 3.4.x
 # Package format: apache-dolphinscheduler-<ver>-bin.tar.gz
 
-dolphinscheduler34_ver=3.4.1
+dolphinscheduler34_ver=3.4.2
 dolphinscheduler33_ver=3.3.2
 dolphinscheduler32_ver=3.2.2
 

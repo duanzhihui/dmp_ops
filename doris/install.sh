@@ -52,7 +52,7 @@ Show_Help() {
   echo "Usage: $0 command ...[parameters]....
   --help, -h                  Show this help message
   --version, -v               Show version info
-  --doris_ver [1-3]           Doris version: 1) ${doris_211_ver}  2) ${doris_308_ver}  3) ${doris_411_ver}
+  --doris_ver [1-3]           Doris version: 1) ${doris_2_ver}  2) ${doris_3_ver}  3) ${doris_4_ver}
   --deploy_mode [mode]        Deploy mode: standalone, integrated, separated
   --fe_only                   Install FE node only
   --be_only                   Install BE node only
@@ -129,12 +129,12 @@ Select_Version() {
   # Support both number (1-3) and version string (e.g. 2.1.11)
   if [ -n "${doris_ver_option}" ]; then
     case "${doris_ver_option}" in
-      1|${doris_211_ver}) doris_ver=${doris_211_ver} ;;
-      2|${doris_308_ver}) doris_ver=${doris_308_ver} ;;
-      3|${doris_411_ver}) doris_ver=${doris_411_ver} ;;
+      1|${doris_2_ver}) doris_ver=${doris_2_ver} ;;
+      2|${doris_3_ver}) doris_ver=${doris_3_ver} ;;
+      3|${doris_4_ver}) doris_ver=${doris_4_ver} ;;
       *)
         echo "${CWARNING}Invalid doris_ver: ${doris_ver_option}${CEND}"
-        echo "Valid: 1(${doris_211_ver}), 2(${doris_308_ver}), 3(${doris_411_ver})"
+        echo "Valid: 1(${doris_2_ver}), 2(${doris_3_ver}), 3(${doris_4_ver})"
         exit 1
         ;;
     esac
@@ -142,9 +142,9 @@ Select_Version() {
     while :; do
       echo
       echo 'Please select Apache Doris version:'
-      echo -e "\t${CMSG}1${CEND}. Doris ${doris_211_ver} (LTS, 存算一体 only)"
-      echo -e "\t${CMSG}2${CEND}. Doris ${doris_308_ver} (存算一体 / 存算分离)"
-      echo -e "\t${CMSG}3${CEND}. Doris ${doris_411_ver} (Latest, 存算一体 / 存算分离)"
+      echo -e "\t${CMSG}1${CEND}. Doris ${doris_2_ver} (LTS, 存算一体 only)"
+      echo -e "\t${CMSG}2${CEND}. Doris ${doris_3_ver} (存算一体 / 存算分离)"
+      echo -e "\t${CMSG}3${CEND}. Doris ${doris_4_ver} (Latest, 存算一体 / 存算分离)"
       read -e -p "Please input a number:(Default 3 press Enter) " doris_ver_option
       doris_ver_option=${doris_ver_option:-3}
       if [[ ! ${doris_ver_option} =~ ^[1-3]$ ]]; then
@@ -155,9 +155,9 @@ Select_Version() {
     done
 
     case "${doris_ver_option}" in
-      1) doris_ver=${doris_211_ver} ;;
-      2) doris_ver=${doris_308_ver} ;;
-      3) doris_ver=${doris_411_ver} ;;
+      1) doris_ver=${doris_2_ver} ;;
+      2) doris_ver=${doris_3_ver} ;;
+      3) doris_ver=${doris_4_ver} ;;
     esac
   fi
 

@@ -40,7 +40,7 @@ Show_Help() {
   --all [version]             Upgrade all installed components
   --rolling                   Rolling upgrade (for cluster mode)
   "
-  echo "Available versions: ${doris_211_ver}, ${doris_308_ver}, ${doris_411_ver}"
+  echo "Available versions: ${doris_2_ver}, ${doris_3_ver}, ${doris_4_ver}"
 }
 
 ARG_NUM=$#
@@ -86,9 +86,9 @@ done
 
 Validate_Version() {
   local ver=$1
-  if [[ ! "${ver}" =~ ^(${doris_211_ver}|${doris_308_ver}|${doris_411_ver})$ ]]; then
+  if [[ ! "${ver}" =~ ^(${doris_2_ver}|${doris_3_ver}|${doris_4_ver})$ ]]; then
     echo "${CFAILURE}Invalid version: ${ver}${CEND}"
-    echo "Available versions: ${doris_211_ver}, ${doris_308_ver}, ${doris_411_ver}"
+    echo "Available versions: ${doris_2_ver}, ${doris_3_ver}, ${doris_4_ver}"
     return 1
   fi
   return 0
@@ -336,15 +336,15 @@ if [ ${ARG_NUM} -eq 0 ]; then
 
   echo ""
   echo 'Please select target version:'
-  echo -e "\t${CMSG}1${CEND}. Doris ${doris_211_ver}"
-  echo -e "\t${CMSG}2${CEND}. Doris ${doris_308_ver}"
-  echo -e "\t${CMSG}3${CEND}. Doris ${doris_411_ver}"
+  echo -e "\t${CMSG}1${CEND}. Doris ${doris_2_ver}"
+  echo -e "\t${CMSG}2${CEND}. Doris ${doris_3_ver}"
+  echo -e "\t${CMSG}3${CEND}. Doris ${doris_4_ver}"
   read -e -p "Please input a number: " ver_option
 
   case "${ver_option}" in
-    1) new_version=${doris_211_ver} ;;
-    2) new_version=${doris_308_ver} ;;
-    3) new_version=${doris_411_ver} ;;
+    1) new_version=${doris_2_ver} ;;
+    2) new_version=${doris_3_ver} ;;
+    3) new_version=${doris_4_ver} ;;
     *) echo "${CWARNING}input error!${CEND}"; exit 1 ;;
   esac
 fi

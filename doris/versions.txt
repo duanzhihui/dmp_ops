@@ -3,9 +3,9 @@
 # Package format: apache-doris-<ver>-bin-<arch>.tar.gz (unified for all versions)
 # Package contains: fe/, be/, ms/ (ms only in 3.x+)
 
-doris_211_ver=2.1.11
-doris_308_ver=3.0.8
-doris_411_ver=4.1.1
+doris_2_ver=2.1.11
+doris_3_ver=3.0.8
+doris_4_ver=4.1.3
 
 # JDK version (Doris 2.x requires JDK 8; Doris 3.x+ requires JDK 17)
 jdk8_ver=8u392
