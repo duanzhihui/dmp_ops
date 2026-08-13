@@ -607,15 +607,27 @@ Setup_Mesh() {
 
     printf "  %-30s " "${_parse_user}@${_parse_host}:${_parse_port}"
 
-    ssh -p ${_parse_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+    # 生成/修复密钥对：
+    # 1) 私钥不存在则生成
+    # 2) 私钥必须无 passphrase 且可读取（否则报错退出，避免后续互信全部失败）
+    # 3) 公钥统一从私钥重新导出，保证公私钥配对
+    # 4) 修正权限（id_rsa 必须 600，否则 ssh 拒绝使用）
+    local keygen_err
+    keygen_err=$(ssh -p ${_parse_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
       -o PasswordAuthentication=no -o BatchMode=yes \
       ${_parse_user}@${_parse_host} \
-      "[ -f ~/.ssh/id_rsa.pub ] || { mkdir -p ~/.ssh && chmod 700 ~/.ssh && ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N '' -q; }" 2>/dev/null
+      "mkdir -p ~/.ssh && chmod 700 ~/.ssh
+       [ -f ~/.ssh/id_rsa ] || ssh-keygen -t rsa -b 2048 -f ~/.ssh/id_rsa -N '' -q || exit 3
+       chmod 600 ~/.ssh/id_rsa
+       pub=\$(ssh-keygen -y -P '' -f ~/.ssh/id_rsa 2>/dev/null) || { echo 'id_rsa is passphrase-protected or corrupted'; exit 2; }
+       echo \"\${pub} \$(whoami)@\$(hostname)\" > ~/.ssh/id_rsa.pub
+       chmod 644 ~/.ssh/id_rsa.pub" 2>&1)
 
     if [ $? -eq 0 ]; then
       echo "${CSUCCESS}[OK]${CEND}"
     else
       echo "${CFAILURE}[FAIL]${CEND}"
+      [ -n "${keygen_err}" ] && echo "    Reason: ${keygen_err}"
     fi
   done
   echo ""
@@ -668,7 +680,7 @@ Setup_Mesh() {
       ssh -p ${_parse_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
         -o PasswordAuthentication=no -o BatchMode=yes \
         ${_parse_user}@${_parse_host} \
-        "grep -q '${key_prefix}' ~/.ssh/authorized_keys 2>/dev/null || echo '${pubkey}' >> ~/.ssh/authorized_keys" 2>/dev/null
+        "grep -q '${key_prefix}' ~/.ssh/authorized_keys 2>/dev/null || echo '${pubkey}' >> ~/.ssh/authorized_keys; chmod 600 ~/.ssh/authorized_keys" 2>/dev/null
 
       if [ $? -eq 0 ]; then
         printf "    %-30s %s\n" "${source_key}" "${CSUCCESS}[OK]${CEND}"
@@ -716,19 +728,20 @@ Setup_Mesh() {
           printf "  %s@%s → %s@%s  %s\n" "${src_user}" "${src_host}" "${dst_user}" "${dst_host}" "${CFAILURE}[FAIL]${CEND}"
         fi
       else
-        # 远程主机测试到其他主机
+        # 远程主机测试到其他主机（捕获 stderr，失败时输出真实原因）
+        local verify_err
         if [ "${dst_host}" == "${local_ip}" ] || [ "${dst_host}" == "127.0.0.1" ] || [ "${dst_host}" == "localhost" ]; then
           # 测试远程→本机
-          ssh -p ${src_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+          verify_err=$(ssh -p ${src_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
             -o PasswordAuthentication=no -o BatchMode=yes \
             ${src_user}@${src_host} \
-            "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o PasswordAuthentication=no -o BatchMode=yes ${dst_user}@${local_ip} 'true'" 2>/dev/null
+            "ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o PasswordAuthentication=no -o BatchMode=yes ${dst_user}@${local_ip} 'true'" 2>&1)
         else
           # 测试远程→远程
-          ssh -p ${src_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+          verify_err=$(ssh -p ${src_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
             -o PasswordAuthentication=no -o BatchMode=yes \
             ${src_user}@${src_host} \
-            "ssh -p ${dst_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o PasswordAuthentication=no -o BatchMode=yes ${dst_user}@${dst_host} 'true'" 2>/dev/null
+            "ssh -p ${dst_port} -o StrictHostKeyChecking=no -o ConnectTimeout=5 -o PasswordAuthentication=no -o BatchMode=yes ${dst_user}@${dst_host} 'true'" 2>&1)
         fi
 
         if [ $? -eq 0 ]; then
@@ -736,6 +749,7 @@ Setup_Mesh() {
         else
           verify_fail=$((verify_fail + 1))
           printf "  %s@%s → %s@%s  %s\n" "${src_user}" "${src_host}" "${dst_user}" "${dst_host}" "${CFAILURE}[FAIL]${CEND}"
+          [ -n "${verify_err}" ] && echo "    Reason: $(echo "${verify_err}" | grep -v '^Warning: Permanently added' | head -1)"
         fi
       fi
     done
