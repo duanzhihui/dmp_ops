@@ -240,10 +240,16 @@ Register_FE_Follower() {
   local follower_port=${3:-${fe_edit_log_port}}
 
   echo "${CMSG}Registering FE Follower: ${follower_ip}:${follower_port}${CEND}"
-  mysql -uroot -P${fe_query_port} -h${master_ip} -e "ALTER SYSTEM ADD FOLLOWER \"${follower_ip}:${follower_port}\""
+  local output
+  output=$(mysql -uroot -P${fe_query_port} -h${master_ip} \
+    -e "ALTER SYSTEM ADD FOLLOWER \"${follower_ip}:${follower_port}\"" 2>&1)
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}FE Follower registered successfully!${CEND}"
+  elif echo "${output}" | grep -qi "already exist"; then
+    # Re-run of a previous deployment: the node is already in the FE metadata
+    echo "${CWARNING}FE Follower ${follower_ip}:${follower_port} already registered, skipping.${CEND}"
   else
+    echo "${output}"
     echo "${CFAILURE}Failed to register FE Follower!${CEND}"
     return 1
   fi
@@ -255,10 +261,15 @@ Register_FE_Observer() {
   local observer_port=${3:-${fe_edit_log_port}}
 
   echo "${CMSG}Registering FE Observer: ${observer_ip}:${observer_port}${CEND}"
-  mysql -uroot -P${fe_query_port} -h${master_ip} -e "ALTER SYSTEM ADD OBSERVER \"${observer_ip}:${observer_port}\""
+  local output
+  output=$(mysql -uroot -P${fe_query_port} -h${master_ip} \
+    -e "ALTER SYSTEM ADD OBSERVER \"${observer_ip}:${observer_port}\"" 2>&1)
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}FE Observer registered successfully!${CEND}"
+  elif echo "${output}" | grep -qi "already exist"; then
+    echo "${CWARNING}FE Observer ${observer_ip}:${observer_port} already registered, skipping.${CEND}"
   else
+    echo "${output}"
     echo "${CFAILURE}Failed to register FE Observer!${CEND}"
     return 1
   fi

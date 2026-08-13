@@ -15,7 +15,9 @@
 #   https://doris.apache.org/zh-CN/docs/4.x/install/deploy-manually/separating-storage-compute-deploy-manually
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
-clear
+# Non-interactive package installs (this script also runs over ssh without a tty)
+export DEBIAN_FRONTEND=noninteractive
+[ -t 1 ] && clear
 printf "
 #######################################################################
 #       DorisStack - Apache Doris Cluster Deployment Tool             #

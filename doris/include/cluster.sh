@@ -388,16 +388,38 @@ EOF
 
 Sync_Deploy_Files() {
   local host=$1
-  local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
+  local doris_ver=$2
+  local base=$(basename ${doris_dir})
+  local remote_dir="/tmp/doris_deploy/${base}"
+  local doris_pkg=$(Get_Doris_Pkg "${doris_ver}")
 
-  echo "${CMSG}  Copying package to ${host}...${CEND}"
-  if ! ssh ${ssh_opts} ${ssh_user}@${host} "rm -rf /tmp/doris_deploy && mkdir -p /tmp/doris_deploy"; then
+  if ! ssh ${ssh_opts} ${ssh_user}@${host} "mkdir -p ${remote_dir}/src"; then
     echo "${CFAILURE}  Cannot connect to ${ssh_user}@${host}:${ssh_port}!${CEND}"
     return 1
   fi
-  if ! scp ${scp_opts} -r ${doris_dir} ${ssh_user}@${host}:/tmp/doris_deploy/; then
+
+  # Scripts and configs only (the package is handled separately, it is several GB)
+  echo "${CMSG}  Syncing deployment scripts to ${host}...${CEND}"
+  if ! tar czf - -C "$(dirname ${doris_dir})" --exclude="${base}/src" "${base}" \
+      | ssh ${ssh_opts} ${ssh_user}@${host} "tar xzf - -C /tmp/doris_deploy"; then
     echo "${CFAILURE}  Failed to copy deployment files to ${host}!${CEND}"
     return 1
+  fi
+
+  # Copy the package only when it is missing or incomplete on the remote node
+  if [ -f "${doris_dir}/src/${doris_pkg}" ]; then
+    local local_size=$(stat -c %s "${doris_dir}/src/${doris_pkg}")
+    local remote_size=$(ssh ${ssh_opts} ${ssh_user}@${host} \
+      "stat -c %s ${remote_dir}/src/${doris_pkg} 2>/dev/null || echo 0")
+    if [ "${local_size}" == "${remote_size}" ]; then
+      echo "${CMSG}  Package already present on ${host}, skipping copy.${CEND}"
+    else
+      echo "${CMSG}  Copying package to ${host}...${CEND}"
+      if ! scp ${scp_opts} "${doris_dir}/src/${doris_pkg}" ${ssh_user}@${host}:${remote_dir}/src/; then
+        echo "${CFAILURE}  Failed to copy package to ${host}!${CEND}"
+        return 1
+      fi
+    fi
   fi
 
   local env_file=$(mktemp)
@@ -419,7 +441,7 @@ Remote_Deploy_Component() {
   local remote_dir="/tmp/doris_deploy/$(basename ${doris_dir})"
 
   Build_SSH_Opts
-  Sync_Deploy_Files "${host}" || return 1
+  Sync_Deploy_Files "${host}" "${doris_ver}" || return 1
 
   echo "${CMSG}  Installing ${component^^} on ${host}...${CEND}"
   if ! ssh ${ssh_opts} ${ssh_user}@${host} "cd ${remote_dir} && bash install.sh --${component}_only --doris_ver ${doris_ver} ${extra_args} --quiet"; then

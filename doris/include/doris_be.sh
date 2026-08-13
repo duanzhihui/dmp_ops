@@ -180,10 +180,16 @@ Register_BE() {
   local be_port=${3:-${be_heartbeat_service_port}}
 
   echo "${CMSG}Registering BE node: ${be_ip}:${be_port}${CEND}"
-  mysql -uroot -P${fe_query_port} -h${fe_ip} -e "ALTER SYSTEM ADD BACKEND \"${be_ip}:${be_port}\""
+  local output
+  output=$(mysql -uroot -P${fe_query_port} -h${fe_ip} \
+    -e "ALTER SYSTEM ADD BACKEND \"${be_ip}:${be_port}\"" 2>&1)
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}BE node registered successfully!${CEND}"
+  elif echo "${output}" | grep -qi "already exists"; then
+    # Re-run of a previous deployment: the node is already in the FE metadata
+    echo "${CWARNING}BE node ${be_ip}:${be_port} already registered, skipping.${CEND}"
   else
+    echo "${output}"
     echo "${CFAILURE}Failed to register BE node!${CEND}"
     return 1
   fi
