@@ -6,6 +6,8 @@ export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 
 doris_dir=$(dirname "$(dirname "$(readlink -f $0)")")
 pushd ${doris_dir} > /dev/null
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${doris_dir}"
 . ./options.conf
 . ./include/color.sh
 . ./include/doris_fe.sh

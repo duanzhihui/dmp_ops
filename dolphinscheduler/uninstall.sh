@@ -18,6 +18,8 @@ printf "
 
 ds_dir=$(dirname "$(readlink -f $0)")
 pushd ${ds_dir} > /dev/null
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${ds_dir}"
 . ./options.conf
 . ./include/color.sh
 . ./include/check_os.sh

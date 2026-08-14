@@ -6,6 +6,8 @@
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 
 script_dir=$(cd "$(dirname "$0")/.." && pwd)
+. "${script_dir}/include/ensure_options_conf.sh"
+Ensure_Options_Conf "${script_dir}"
 . "${script_dir}/options.conf"
 . "${script_dir}/include/color.sh"
 

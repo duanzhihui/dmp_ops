@@ -19,6 +19,8 @@ pushd ${seatunnel_dir} > /dev/null
 mkdir -p ${seatunnel_dir}/src
 
 # Source configuration and modules
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${seatunnel_dir}"
 . ./options.conf
 . ./versions.txt
 . ./include/color.sh

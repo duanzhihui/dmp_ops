@@ -15,6 +15,8 @@ export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 
 oneinstack_dir=$(dirname "`readlink -f $0`")
 pushd ${oneinstack_dir}/tools > /dev/null
+. ../include/ensure_options_conf.sh
+Ensure_Options_Conf "${oneinstack_dir}"
 . ../options.conf
 [ ! -e "${backup_dir}" ] && mkdir -p ${backup_dir}
 

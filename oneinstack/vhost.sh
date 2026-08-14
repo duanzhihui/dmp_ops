@@ -21,6 +21,8 @@ printf "
 
 oneinstack_dir=$(dirname "`readlink -f $0`")
 pushd ${oneinstack_dir} > /dev/null
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${oneinstack_dir}"
 . ./options.conf
 . ./include/color.sh
 . ./include/check_dir.sh

@@ -22,6 +22,8 @@ pushd ${mysql_dir} > /dev/null
 [ $(id -u) != "0" ] && { echo "Error: You must be root to run this script"; exit 1; }
 
 # 加载配置和公共库
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${mysql_dir}"
 . ./options.conf
 . ./include/color.sh
 . ./include/check_os.sh

@@ -33,6 +33,8 @@ printf "
 doris_dir=$(dirname "$(readlink -f $0)")
 pushd ${doris_dir} > /dev/null
 . ./versions.txt
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${doris_dir}"
 . ./options.conf
 # Runtime context propagated from the deploy node (cluster mode), overrides options.conf
 [ -f ./.deploy_env ] && . ./.deploy_env

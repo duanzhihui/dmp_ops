@@ -8,6 +8,9 @@
 #       https://oneinstack.com
 #       https://github.com/oneinstack/oneinstack
 
+oneinstack_dir=$(cd "$(dirname "$0")/.." && pwd)
+. ../include/ensure_options_conf.sh
+Ensure_Options_Conf "${oneinstack_dir}"
 . ../options.conf
 
 WebSite=$1

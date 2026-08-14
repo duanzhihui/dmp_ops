@@ -12,6 +12,8 @@ tools_dir=$(dirname "$(readlink -f $0)")
 mysql_dir=$(dirname "${tools_dir}")
 
 # 加载配置
+. ${mysql_dir}/include/ensure_options_conf.sh
+Ensure_Options_Conf "${mysql_dir}"
 . ${mysql_dir}/options.conf
 . ${mysql_dir}/include/check_dir.sh
 

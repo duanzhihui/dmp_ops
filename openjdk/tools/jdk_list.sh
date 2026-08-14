@@ -8,6 +8,8 @@ export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 
 openjdk_dir=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 
+. "${openjdk_dir}/include/ensure_options_conf.sh"
+Ensure_Options_Conf "${openjdk_dir}"
 . "${openjdk_dir}/options.conf"
 . "${openjdk_dir}/versions.txt"
 . "${openjdk_dir}/include/color.sh"

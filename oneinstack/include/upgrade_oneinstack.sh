@@ -24,8 +24,10 @@ Upgrade_OneinStack() {
     else
       tar xzf /tmp/oneinstack.tar.gz -C ../
     fi
+    # 模板化：从新模板创建 options.conf（若不存在），再合并用户旧值
+    [ ! -e ./options.conf ] && [ -e ./options.conf.template ] && cp ./options.conf.template ./options.conf
     IFS=$'\n'
-    for L in `grep -vE '^#|^$' /tmp/options.conf`
+    for L in `grep -vE '^#|^$|^conf_version=' /tmp/options.conf`
     do
       IFS=$IFS_old
       Key="`echo ${L%%=*}`"

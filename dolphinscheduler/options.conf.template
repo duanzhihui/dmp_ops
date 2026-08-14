@@ -7,6 +7,10 @@
 #   cluster        - Multi-node deployment for production
 
 #########################################################################
+# 配置版本号（勿手动修改，由 options.conf.template 同步）
+conf_version=1
+
+#########################################################################
 # Mirror link for downloading DolphinScheduler packages
 # Package: apache-dolphinscheduler-<ver>-bin.tar.gz
 mirror_link=https://downloads.apache.org/dolphinscheduler

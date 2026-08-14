@@ -2,6 +2,9 @@
 # 项目: oneinstack/zookeeper
 # 说明: 所有可配置参数的中央存储
 
+# ===== 配置版本号（勿手动修改，由 options.conf.template 同步）=====
+conf_version=1
+
 # ===== 镜像源 =====
 mirror_link=https://mirrors.tuna.tsinghua.edu.cn/apache
 

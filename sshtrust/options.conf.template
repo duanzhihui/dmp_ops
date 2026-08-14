@@ -2,6 +2,9 @@
 # 项目: sshtrust
 # 说明: 所有可配置参数的中央存储
 
+# ===== 配置版本号（勿手动修改，由 options.conf.template 同步）=====
+conf_version=1
+
 # ===== SSH 互信配置 =====
 ssh_user=root
 ssh_port=22

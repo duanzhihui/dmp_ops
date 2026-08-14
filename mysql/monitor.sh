@@ -11,6 +11,8 @@ mysql_dir=$(dirname "$(readlink -f $0)")
 pushd ${mysql_dir} > /dev/null
 
 # 加载配置和公共库
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${mysql_dir}"
 . ./options.conf
 . ./include/color.sh
 . ./include/check_dir.sh

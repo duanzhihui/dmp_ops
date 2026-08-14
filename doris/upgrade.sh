@@ -21,6 +21,8 @@ printf "
 doris_dir=$(dirname "$(readlink -f $0)")
 pushd ${doris_dir} > /dev/null
 . ./versions.txt
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${doris_dir}"
 . ./options.conf
 . ./include/color.sh
 . ./include/check_os.sh

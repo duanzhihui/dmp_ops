@@ -16,6 +16,8 @@ seatunnel_dir=$(dirname $(readlink -f $0))
 pushd ${seatunnel_dir} > /dev/null
 
 # Source configuration and modules
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${seatunnel_dir}"
 . ./options.conf
 . ./versions.txt
 . ./include/color.sh

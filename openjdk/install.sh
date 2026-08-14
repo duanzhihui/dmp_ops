@@ -14,6 +14,8 @@ if [[ ! "$1" =~ ^-h$|^--help$|^-v$|^--version$ ]]; then
 fi
 
 # 加载配置与公共库
+. "${openjdk_dir}/include/ensure_options_conf.sh"
+Ensure_Options_Conf "${openjdk_dir}"
 . "${openjdk_dir}/options.conf"
 . "${openjdk_dir}/versions.txt"
 . "${openjdk_dir}/include/color.sh"

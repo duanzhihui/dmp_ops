@@ -12,6 +12,8 @@ script_dir=$(cd "$(dirname "$0")" && pwd)
 [ $(id -u) != "0" ] && { echo "Error: You must be root to run this script"; exit 1; }
 
 # 加载配置
+. "${script_dir}/include/ensure_options_conf.sh"
+Ensure_Options_Conf "${script_dir}"
 . "${script_dir}/options.conf"
 . "${script_dir}/include/color.sh"
 

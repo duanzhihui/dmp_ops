@@ -4,6 +4,8 @@ clear
 oneinstack_dir=$(dirname "$(readlink -f $0)")/..
 pushd ${oneinstack_dir} > /dev/null
 
+. ./include/ensure_options_conf.sh
+Ensure_Options_Conf "${oneinstack_dir}"
 . ./options.conf
 . ./versions.txt
 . ./include/color.sh

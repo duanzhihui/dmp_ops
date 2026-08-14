@@ -10,6 +10,8 @@ openjdk_dir=$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)
 
 [ $(id -u) != "0" ] && echo "Warning: non-root may fail to attach to other users' JVM"
 
+. "${openjdk_dir}/include/ensure_options_conf.sh"
+Ensure_Options_Conf "${openjdk_dir}"
 . "${openjdk_dir}/options.conf"
 . "${openjdk_dir}/versions.txt"
 . "${openjdk_dir}/include/color.sh"

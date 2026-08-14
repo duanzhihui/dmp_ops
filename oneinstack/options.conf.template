@@ -1,3 +1,6 @@
+# 配置版本号（勿手动修改，由 options.conf.template 同步）
+conf_version=1
+
 # mirror link
 mirror_link=https://mirrors.oneinstack.com
 

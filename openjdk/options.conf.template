@@ -2,6 +2,9 @@
 # 项目: dmp_ops/openjdk
 # 所有可变参数集中在此，脚本内只引用变量
 
+# ===== 配置版本号（勿手动修改，由 options.conf.template 同步）=====
+conf_version=1
+
 # ===== 镜像源 =====
 mirror_link=https://mirrors.tuna.tsinghua.edu.cn
 adoptium_deb_mirror=https://mirrors.tuna.tsinghua.edu.cn/Adoptium/deb

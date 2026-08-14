@@ -9,6 +9,8 @@ export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
 script_dir=$(cd "$(dirname "$0")" && pwd)
 
 # 加载配置和公共库
+. "${script_dir}/include/ensure_options_conf.sh"
+Ensure_Options_Conf "${script_dir}"
 . "${script_dir}/options.conf"
 . "${script_dir}/versions.txt"
 . "${script_dir}/include/color.sh"
