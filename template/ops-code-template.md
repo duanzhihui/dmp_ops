@@ -17,14 +17,17 @@
 ├── backup.sh               # 备份执行脚本（由 cron 调用）
 ├── backup_setup.sh         # 备份策略配置向导
 ├── monitor.sh              # 健康检查与状态监控
-├── options.conf            # 中央配置文件（路径、密码、备份参数）
+├── options.conf.template   # 中央配置模板（git 跟踪，含 conf_version 版本号）
+├── options.conf            # 运行时配置（.gitignore 忽略，由模板自动生成/升级）
 ├── versions.txt            # 版本号清单（与 options.conf 分离）
+├── .gitignore              # 忽略 options.conf 及其备份文件
 ├── include/                # 功能模块库
 │   ├── color.sh            #   终端颜色定义
 │   ├── check_os.sh         #   操作系统检测与适配
 │   ├── check_dir.sh        #   安装目录检测与变量初始化
 │   ├── download.sh         #   下载函数（多源容错）
 │   ├── get_char.sh         #   交互输入辅助函数
+│   ├── ensure_options_conf.sh  # options.conf 模板化引导（创建/备份/升级）
 │   ├── {software}.sh       #   软件安装模块（Install/Uninstall 函数）
 │   ├── upgrade_{type}.sh   #   软件升级模块（Upgrade 函数）
 │   └── monitor_{type}.sh   #   监控检查模块（Check/Status 函数）
@@ -71,8 +74,10 @@
 
 | 文件 | 职责 |
 |------|------|
-| `options.conf` | 所有可配置项的中央存储：安装路径、数据目录、密码、备份参数、云存储桶名 |
+| `options.conf.template` | 配置模板（git 跟踪）：含 `conf_version` 版本号与所有默认值，模板改动时递增版本号 |
+| `options.conf` | 运行时配置（.gitignore 忽略）：首次运行由模板自动生成，模板版本变更时自动备份旧配置并重建 |
 | `versions.txt` | 所有软件的版本号清单，与 options.conf 分离以便独立更新 |
+| `include/ensure_options_conf.sh` | options.conf 引导函数：检测模板版本，按需创建/备份/升级 options.conf |
 
 ## 3. 运维生命周期 — 五大阶段代码模式
 
@@ -432,7 +437,13 @@ fi
 
 ### 5.1 options.conf 结构
 
+> `options.conf` 由 `options.conf.template` 在运行时自动生成，**勿手动创建或提交到 git**。
+> 模板文件顶部必须包含 `conf_version` 版本号字段，模板内容变更时递增该版本号。
+
 ```bash
+# ===== 配置版本号（勿手动修改，由 options.conf.template 同步）=====
+conf_version=1
+
 # ===== 镜像源 =====
 mirror_link=https://mirrors.example.com
 
@@ -468,6 +479,116 @@ nginx_ver=1.31.0
 mysql80_ver=8.0.39
 redis_ver=8.4.0
 php84_ver=8.4.16
+```
+
+### 5.3 options.conf 模板化与版本自管理
+
+**目的**：避免 `git pull` 更新代码时覆盖用户已修改的 `options.conf`。
+
+**机制**：git 只跟踪 `options.conf.template`（含 `conf_version` 版本号），`options.conf` 加入 `.gitignore`，由 `include/ensure_options_conf.sh` 在脚本启动时自动管理。
+
+**.gitignore 内容**：
+
+```
+# 运行时生成的配置文件（由 options.conf.template 同步，勿提交）
+options.conf
+options.conf.bak
+options.conf.bak.*
+options.conf.[0-9]*
+```
+
+**引导函数 `Ensure_Options_Conf <module_dir>`**（定义于 `include/ensure_options_conf.sh`）：
+
+| 场景 | 条件 | 行为 |
+|------|------|------|
+| 模板不存在 | 无 `options.conf.template` | 直接返回（兼容无模板场景） |
+| 首次运行 | `options.conf` 不存在 | `cp 模板 options.conf`，提示已创建 |
+| 版本一致 | `conf_version` 与模板相同 | 沿用现有 `options.conf`（保留用户修改） |
+| 版本升级 | `conf_version` 与模板不同 | 备份旧配置 → 从模板重建 |
+| 旧版无版本字段 | `options.conf` 无 `conf_version` 行 | 备份为 `options.conf.bak` → 从模板重建 |
+
+**备份命名规则**：
+- 旧版有版本号：`options.conf.<旧版本>`（重名则追加 `.1`/`.2`...）
+- 旧版无版本号：`options.conf.bak`（重名则追加 `.1`/`.2`...）
+
+**入口脚本注入模式**（所有 source options.conf 的脚本均需在加载前注入）：
+
+```bash
+# 获取脚本目录
+script_dir=$(cd "$(dirname "$0")" && pwd)
+
+# 加载配置和公共库
+. "${script_dir}/include/ensure_options_conf.sh"   # 先加载引导函数
+Ensure_Options_Conf "${script_dir}"                 # 再执行引导（创建/备份/升级 options.conf）
+. "${script_dir}/options.conf"                      # 最后加载（已确保存在且为最新版本）
+. "${script_dir}/include/color.sh"
+# ... 其他 include
+```
+
+**模板变更流程**（开发者）：
+1. 修改 `options.conf.template`（新增/调整配置项）
+2. 递增模板中的 `conf_version=N`
+3. 提交到 git
+4. 用户 `git pull` 后首次运行任意脚本时，`Ensure_Options_Conf` 自动备份旧 `options.conf` 并从新模板重建
+
+**ensure_options_conf.sh 完整实现**：
+
+```bash
+#!/bin/bash
+# options.conf 模板化引导逻辑
+# 功能: 运行时根据 options.conf.template 与版本号自动创建/备份/升级 options.conf
+# 用法: Ensure_Options_Conf <module_dir>
+
+Ensure_Options_Conf() {
+  local module_dir="$1"
+  local tmpl="${module_dir}/options.conf.template"
+  local conf="${module_dir}/options.conf"
+
+  # 模板不存在，兼容无模板场景
+  [ -f "${tmpl}" ] || return 0
+
+  # 读取模板版本号
+  local tmpl_ver
+  tmpl_ver=$(grep -E '^conf_version=' "${tmpl}" 2>/dev/null | head -1 | cut -d= -f2-)
+  tmpl_ver="${tmpl_ver#\"}"; tmpl_ver="${tmpl_ver%\"}"
+  tmpl_ver="${tmpl_ver#\'}"; tmpl_ver="${tmpl_ver%\'}"
+  tmpl_ver=$(echo "${tmpl_ver}" | tr -d '[:space:]')
+
+  # options.conf 不存在 -> 从模板创建
+  if [ ! -f "${conf}" ]; then
+    cp -p "${tmpl}" "${conf}"
+    echo "${CMSG}[options.conf] 已从模板创建 (version=${tmpl_ver})${CEND}"
+    return 0
+  fi
+
+  # 读取现有 options.conf 版本号
+  local cur_ver
+  cur_ver=$(grep -E '^conf_version=' "${conf}" 2>/dev/null | head -1 | cut -d= -f2-)
+  cur_ver="${cur_ver#\"}"; cur_ver="${cur_ver%\"}"
+  cur_ver="${cur_ver#\'}"; cur_ver="${cur_ver%\'}"
+  cur_ver=$(echo "${cur_ver}" | tr -d '[:space:]')
+
+  # 版本一致 -> 沿用
+  if [ -n "${cur_ver}" ] && [ "${cur_ver}" = "${tmpl_ver}" ]; then
+    return 0
+  fi
+
+  # 版本不一致 -> 备份后重建
+  local bak
+  if [ -z "${cur_ver}" ]; then
+    bak="${conf}.bak"
+    local i=1
+    while [ -e "${bak}" ]; do bak="${conf}.bak.${i}"; i=$((i + 1)); done
+  else
+    bak="${conf}.${cur_ver}"
+    local i=1
+    while [ -e "${bak}" ]; do bak="${conf}.${cur_ver}.${i}"; i=$((i + 1)); done
+  fi
+
+  cp -p "${conf}" "${bak}"
+  cp -p "${tmpl}" "${conf}"
+  echo "${CMSG}[options.conf] 版本变更 (旧=${cur_ver:-unknown} 新=${tmpl_ver})，旧配置已备份为 ${bak}${CEND}"
+}
 ```
 
 ## 6. 服务管理规范 (systemd unit 模板)
@@ -567,13 +688,15 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 
 ## 文件清单
 
-### 1. `options.conf` — 中央配置文件
-**功能**: 存储所有可配置参数
+### 1. `options.conf.template` — 中央配置模板
+**功能**: 配置模板（git 跟踪），运行时由 `ensure_options_conf.sh` 据此生成 `options.conf`
 **要求**:
+- 顶部必须包含 `conf_version=N` 版本号字段，模板内容变更时递增
 - 安装路径、数据目录、运行用户、密码、备份参数等
 - 密码字段默认留空，由安装脚本自动生成
 - 备份相关字段：backup_dir, expired_days, backup_destination, backup_content
 - 使用 `key=value` 格式，用注释分组
+- 配套 `.gitignore` 忽略 `options.conf` 及备份文件（`options.conf.bak*`、`options.conf.[0-9]*`）
 
 ### 2. `versions.txt` — 版本号清单
 **功能**: 管理所有依赖软件的版本号
@@ -604,7 +727,16 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 - 支持断点续传 (wget -c)
 - 失败时提示用户手动下载路径
 
-### 6. `include/{software}.sh` — 安装/卸载模块
+### 6. `include/ensure_options_conf.sh` — options.conf 模板化引导
+**功能**: 运行时根据 `options.conf.template` 与 `conf_version` 自动创建/备份/升级 `options.conf`
+**要求**:
+- 提供 `Ensure_Options_Conf <module_dir>` 函数
+- 三态判定：不存在→从模板创建；版本一致→沿用；不一致→备份旧配置后从模板重建
+- 旧版无 `conf_version` 字段时备份为 `options.conf.bak`
+- 旧版有版本号时备份为 `options.conf.<旧版本>`（重名追加序号）
+- 所有入口脚本在 `. options.conf` 之前必须先 source 本文件并调用 `Ensure_Options_Conf`
+
+### 7. `include/{software}.sh` — 安装/卸载模块
 **功能**: 软件的安装和卸载逻辑
 **要求**:
 - `Install_{Software}()` 函数，完整安装流程：
@@ -621,7 +753,7 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
   11. 安装失败时清理并退出
 - `Uninstall_{Software}()` 函数
 
-### 7. `include/upgrade_{software}.sh` — 升级模块
+### 8. `include/upgrade_{software}.sh` — 升级模块
 **功能**: 软件的版本升级逻辑
 **要求**:
 - `Upgrade_{Software}()` 函数：
@@ -634,7 +766,7 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
   7. 停服务 → 替换文件 → 启服务
   8. 验证升级结果
 
-### 8. `include/monitor_{software}.sh` — 监控模块
+### 9. `include/monitor_{software}.sh` — 监控模块
 **功能**: 健康检查与状态监控
 **要求**:
 - `Check_Process()` — 检查进程是否存活，不存在则尝试自动重启
@@ -645,17 +777,18 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 - `Send_Alert()` — 告警通知（邮件 + Webhook）
 - `Monitor_Status()` — 输出状态报告（版本、运行时间、资源占用）
 
-### 9. `install.sh` — 安装主入口
+### 10. `install.sh` — 安装主入口
 **功能**: 安装主控脚本
 **要求**:
 - 文件头：root 检查、source 配置和公共库
+- source 顺序：先 `ensure_options_conf.sh` 并调用 `Ensure_Options_Conf`，再 `options.conf`，最后其他 include
 - getopt 参数解析，支持 --help, --version, --quiet, --{component}_option
 - 无参数时显示交互式菜单
 - 有参数时静默执行
 - 密码随机生成并写入 options.conf
 - 安装完成后显示摘要信息（版本、路径、端口、密码）
 
-### 10. `uninstall.sh` — 卸载主入口
+### 11. `uninstall.sh` — 卸载主入口
 **功能**: 卸载主控脚本
 **要求**:
 - getopt 参数解析，支持 --quiet, --all, --{component}
@@ -665,14 +798,14 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 - 清理 /etc/profile 中的 PATH
 - 清理 options.conf 中的密码
 
-### 11. `upgrade.sh` — 升级主入口
+### 12. `upgrade.sh` — 升级主入口
 **功能**: 升级主控脚本
 **要求**:
 - getopt 参数解析，--{component} [version]
 - 无参数时显示菜单
 - source 对应的 upgrade 模块并调用
 
-### 12. `backup.sh` — 备份执行脚本
+### 13. `backup.sh` — 备份执行脚本
 **功能**: 由 cron 调用的备份执行器
 **要求**:
 - 从 options.conf 读取备份配置
@@ -681,7 +814,7 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 - 过期清理：按 expired_days 删除旧备份
 - 文件命名格式：`{type}_{name}_{date}_{time}.tgz`
 
-### 13. `backup_setup.sh` — 备份配置向导
+### 14. `backup_setup.sh` — 备份配置向导
 **功能**: 交互式配置备份策略
 **要求**:
 - 交互式选择备份目标（本地/远程/云存储）
@@ -690,7 +823,7 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 - 将配置写入 options.conf
 - 设置 cron 定时任务
 
-### 14. `monitor.sh` — 监控主入口
+### 15. `monitor.sh` — 监控主入口
 **功能**: 监控主控脚本
 **要求**:
 - 可由 cron 定时调用或手动执行
@@ -699,7 +832,7 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 - 输出到日志文件 + 终端
 - 异常时触发告警
 
-### 15. `init.d/{software}.service` — systemd 服务文件
+### 16. `init.d/{software}.service` — systemd 服务文件
 **功能**: systemd unit 定义
 **要求**:
 - Type=forking (守护进程模式) 或 Type=simple (前台模式)
@@ -722,9 +855,10 @@ password=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c8)
 9. **root 检查**: `[ $(id -u) != "0" ] && { echo "Error: must be root"; exit 1; }`
 10. **工作目录**: 使用 `pushd/popd` 管理目录切换
 11. **临时文件**: 操作完成后及时清理（rm -rf {software}-${ver}）
-12. **配置分离**: 所有可变参数放 options.conf，版本号放 versions.txt，代码中只引用变量
-13. **安全**: 密码用 `/dev/urandom` 生成，不硬编码；service 使用非 root 用户运行
-14. **兼容性**: 支持 x86_64 和 aarch64 架构，支持 RHEL/Debian/Ubuntu 系列
+12. **配置分离**: 所有可变参数放 `options.conf.template`（git 跟踪，含 `conf_version`），运行时生成 `options.conf`（.gitignore 忽略）；版本号放 versions.txt，代码中只引用变量
+13. **配置模板化**: 所有入口脚本 source `options.conf` 前必须先调用 `Ensure_Options_Conf` 确保文件存在且为最新版本；模板变更时递增 `conf_version`
+14. **安全**: 密码用 `/dev/urandom` 生成，不硬编码；service 使用非 root 用户运行
+15. **兼容性**: 支持 x86_64 和 aarch64 架构，支持 RHEL/Debian/Ubuntu 系列
 
 # 示例：使用本模板为 Redis 生成运维代码
 
@@ -807,3 +941,4 @@ monitor.sh 应自动检测已安装组件并逐一检查。
 | 多源下载 | `urls=(mirror1 mirror2 official)` → 逐一尝试 | 下载可靠性保证 |
 | 环境变量管理 | 安装时 `sed` 追加 PATH，卸载时 `sed` 删除 | PATH 的正反向管理 |
 | 配置持久化 | `sed -i "s@^key=.*@key=value@" options.conf` | 运行时修改持久化到配置文件 |
+| 配置模板化 | `options.conf.template`(git 跟踪) + `Ensure_Options_Conf` 引导 + `options.conf`(.gitignore) | 避免 git pull 覆盖用户配置，按 `conf_version` 自动备份升级 |
