@@ -10,7 +10,7 @@ Group=@RUN_GROUP@
 Environment="JAVA_HOME=@JAVA_HOME@"
 LimitNOFILE=65535
 LimitNPROC=65535
-ExecStart=@FE_INSTALL_DIR@/bin/start_fe.sh --daemon
+ExecStart=@FE_INSTALL_DIR@/bin/start_fe.sh @HELPER_ARGS@ --daemon
 ExecStop=-@FE_INSTALL_DIR@/bin/stop_fe.sh
 Restart=on-failure
 RestartSec=10

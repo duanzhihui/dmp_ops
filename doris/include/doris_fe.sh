@@ -6,6 +6,7 @@
 
 Install_FE() {
   local doris_ver=$1
+  local helper_node=$2
   local major_ver=${doris_ver%%.*}
 
   echo "${CMSG}============================================${CEND}"
@@ -46,8 +47,9 @@ Install_FE() {
   chown -R ${run_user}:${run_group} ${fe_meta_dir}
   chown -R ${run_user}:${run_group} ${fe_log_dir}
 
-  # Install systemd service
-  Install_FE_Service
+  # Install systemd service (follower nodes carry --helper so they always
+  # resync from the master on restart, preventing split-brain / divergent meta)
+  Install_FE_Service "${helper_node}"
 
   echo "${CSUCCESS}Doris FE ${doris_ver} installed successfully!${CEND}"
   echo "${CSUCCESS}FE install dir: ${fe_install_dir}${CEND}"
@@ -168,11 +170,26 @@ Configure_FE() {
 }
 
 Install_FE_Service() {
+  local helper_node=$1
+  local helper_args=""
+
+  # Follower nodes pass --helper <master:port> so that on every restart they
+  # resync metadata from the master instead of booting as an independent
+  # cluster (which would cause "all followers, no master" + meta divergence).
+  # Master nodes (helper_node empty) start without --helper.
+  if [ -n "${helper_node}" ]; then
+    helper_args="--helper ${helper_node}"
+    echo "${CMSG}  FE role: FOLLOWER (helper=${helper_node})${CEND}"
+  else
+    echo "${CMSG}  FE role: MASTER (no helper)${CEND}"
+  fi
+
   cp ${doris_dir}/init.d/doris-fe.service /lib/systemd/system/doris-fe.service
   sed -i "s|@RUN_USER@|${run_user}|g" /lib/systemd/system/doris-fe.service
   sed -i "s|@RUN_GROUP@|${run_group}|g" /lib/systemd/system/doris-fe.service
   sed -i "s|@FE_INSTALL_DIR@|${fe_install_dir}|g" /lib/systemd/system/doris-fe.service
   sed -i "s|@JAVA_HOME@|${JAVA_HOME}|g" /lib/systemd/system/doris-fe.service
+  sed -i "s|@HELPER_ARGS@|${helper_args}|g" /lib/systemd/system/doris-fe.service
   systemctl daemon-reload
   systemctl enable doris-fe
   echo "${CSUCCESS}Doris FE systemd service installed.${CEND}"

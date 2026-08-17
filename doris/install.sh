@@ -334,7 +334,7 @@ Main() {
     fi
 
     if [ "${fe_only_flag}" == "y" ]; then
-      Install_FE "${doris_ver}"
+      Install_FE "${doris_ver}" "${helper_node}"
       Start_FE "${helper_node}" || exit 1
     fi
 

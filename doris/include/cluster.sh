@@ -359,6 +359,107 @@ Is_Local_Host() {
   return 1
 }
 
+# Start the whole FE cluster in order: master first, then followers.
+# This guarantees the original master stays master after a restart and
+# avoids the "all followers, no master" + meta divergence problem that
+# happens when every FE boots simultaneously with `start_fe.sh --daemon`.
+# Each follower's systemd unit already carries `--helper <master:port>`,
+# so once the master is up they resync from it.
+Start_FE_Cluster() {
+  if [ -z "${fe_nodes}" ]; then
+    echo "${CFAILURE}fe_nodes not configured in options.conf${CEND}"
+    return 1
+  fi
+
+  IFS=',' read -ra FE_ARRAY <<< "${fe_nodes}"
+  local master_fe_host=$(echo ${FE_ARRAY[0]} | awk -F: '{print $1}')
+  local master_fe_port=$(echo ${FE_ARRAY[0]} | awk -F: '{print $2}')
+  master_fe_port=${master_fe_port:-${fe_edit_log_port}}
+
+  Build_SSH_Opts
+
+  # 1. Start master node first
+  echo "${CMSG}[1] Starting FE Master on ${master_fe_host}...${CEND}"
+  if Is_Local_Host "${master_fe_host}"; then
+    systemctl start doris-fe
+  else
+    ssh ${ssh_opts} ${ssh_user}@${master_fe_host} "systemctl start doris-fe"
+  fi
+  if [ $? -ne 0 ]; then
+    echo "${CFAILURE}Failed to start FE Master on ${master_fe_host}!${CEND}"
+    return 1
+  fi
+
+  # 2. Wait for master to be ready (MySQL port reachable)
+  echo "${CMSG}[2] Waiting for FE Master to be ready...${CEND}"
+  local retry=0
+  while [ ${retry} -lt 30 ]; do
+    if mysql -uroot -P${fe_query_port} -h${master_fe_host} -e "show frontends" > /dev/null 2>&1; then
+      echo "${CSUCCESS}FE Master is ready!${CEND}"
+      break
+    fi
+    sleep 5
+    retry=$((retry + 1))
+  done
+  if [ ${retry} -ge 30 ]; then
+    echo "${CFAILURE}FE Master failed to become ready within timeout!${CEND}"
+    echo "${CFAILURE}Aborting follower startup to avoid meta divergence.${CEND}"
+    return 1
+  fi
+
+  # 3. Start follower nodes one by one
+  local idx=0
+  for ((i=1; i<${#FE_ARRAY[@]}; i++)); do
+    local fe_host=$(echo ${FE_ARRAY[$i]} | awk -F: '{print $1}')
+    idx=$((idx + 1))
+    echo "${CMSG}[$((2 + idx))] Starting FE Follower on ${fe_host}...${CEND}"
+    if Is_Local_Host "${fe_host}"; then
+      systemctl start doris-fe
+    else
+      ssh ${ssh_opts} ${ssh_user}@${fe_host} "systemctl start doris-fe"
+    fi
+    if [ $? -ne 0 ]; then
+      echo "${CWARNING}Failed to start FE Follower on ${fe_host}${CEND}"
+    fi
+  done
+
+  echo "${CSUCCESS}FE cluster start sequence completed.${CEND}"
+}
+
+# Stop the whole FE cluster in reverse order: followers first, master last.
+Stop_FE_Cluster() {
+  if [ -z "${fe_nodes}" ]; then
+    echo "${CFAILURE}fe_nodes not configured in options.conf${CEND}"
+    return 1
+  fi
+
+  IFS=',' read -ra FE_ARRAY <<< "${fe_nodes}"
+  local master_fe_host=$(echo ${FE_ARRAY[0]} | awk -F: '{print $1}')
+
+  Build_SSH_Opts
+
+  # 1. Stop follower nodes first
+  for ((i=${#FE_ARRAY[@]} - 1; i >= 1; i--)); do
+    local fe_host=$(echo ${FE_ARRAY[$i]} | awk -F: '{print $1}')
+    echo "${CMSG}Stopping FE Follower on ${fe_host}...${CEND}"
+    if Is_Local_Host "${fe_host}"; then
+      systemctl stop doris-fe
+    else
+      ssh ${ssh_opts} ${ssh_user}@${fe_host} "systemctl stop doris-fe"
+    fi
+  done
+
+  # 2. Stop master last
+  echo "${CMSG}Stopping FE Master on ${master_fe_host}...${CEND}"
+  if Is_Local_Host "${master_fe_host}"; then
+    systemctl stop doris-fe
+  else
+    ssh ${ssh_opts} ${ssh_user}@${master_fe_host} "systemctl stop doris-fe"
+  fi
+
+  echo "${CSUCCESS}FE cluster stop sequence completed.${CEND}"
+}
+
 # Build ssh/scp option strings.
 # NOTE: ssh uses -p for the port, scp uses -P (scp's -p means "preserve times").
 Build_SSH_Opts() {
@@ -457,7 +558,7 @@ Remote_Deploy_FE() {
   local helper_node=$3
 
   if Is_Local_Host "${host}"; then
-    Install_FE "${doris_ver}"
+    Install_FE "${doris_ver}" "${helper_node}"
     Start_FE "${helper_node}" || return 1
   else
     local extra_args=""

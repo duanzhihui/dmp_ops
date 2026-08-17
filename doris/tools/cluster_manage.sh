@@ -47,10 +47,20 @@ case "$1" in
     Show_Cluster_Status "${2}"
     ;;
   start-fe)
-    Start_FE "${2}"
+    # If fe_nodes is configured (cluster mode), start in order: master first,
+    # then followers. Otherwise fall back to single-node Start_FE.
+    if [ -n "${fe_nodes}" ] && [ "${deploy_mode}" != "standalone" ]; then
+      Start_FE_Cluster
+    else
+      Start_FE "${2}"
+    fi
     ;;
   stop-fe)
-    Stop_FE
+    if [ -n "${fe_nodes}" ] && [ "${deploy_mode}" != "standalone" ]; then
+      Stop_FE_Cluster
+    else
+      Stop_FE
+    fi
     ;;
   start-be)
     Start_BE
@@ -59,9 +69,15 @@ case "$1" in
     Stop_BE
     ;;
   restart-fe)
-    Stop_FE
-    sleep 3
-    Start_FE
+    if [ -n "${fe_nodes}" ] && [ "${deploy_mode}" != "standalone" ]; then
+      Stop_FE_Cluster
+      sleep 3
+      Start_FE_Cluster
+    else
+      Stop_FE
+      sleep 3
+      Start_FE
+    fi
     ;;
   restart-be)
     Stop_BE
