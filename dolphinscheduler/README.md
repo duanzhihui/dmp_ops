@@ -202,6 +202,40 @@ systemctl {start|stop|restart|status} dolphinscheduler-alert
 ./monitor.sh --check
 ```
 
+### 持续监控
+
+```bash
+# 每 60 秒检查一次，发现故障写日志（不外发）
+./monitor.sh --loop 60
+
+# 持续监控 + 自动重启故障服务
+./monitor.sh --loop 60 --recovery
+```
+
+### Cluster 模式集群级监控
+
+Cluster 模式下，**只需在控制节点**（`options.conf` 中配置了 `ips` 的节点）执行
+`monitor.sh`，脚本会经 SSH 遍历所有节点，统一检查整个集群。各节点无需单独跑。
+
+```bash
+# 全集群状态总览（每个节点每个角色的 active/inactive/unknown）
+./monitor.sh --status
+
+# 全集群健康检查：每节点按角色检查进程/端口/HTTP/磁盘，
+# 共享组件（ZooKeeper / 元数据库）只在控制节点查一次
+./monitor.sh --check
+
+# 持续监控全集群（60s 一轮），发现故障写日志
+./monitor.sh --loop 60
+
+# 持续监控 + 自动重启故障服务
+./monitor.sh --loop 60 --recovery
+```
+
+监控日志写入 `${dolphinscheduler_log_dir}/monitor.log`（默认
+`/data/dolphinscheduler/logs/monitor.log`）。当 `options.conf` 中的
+`alert_email` 和 `webhook_url` 均为空时，`Send_Alert` 只写日志文件，不外发。
+
 ### 升级
 
 ```bash

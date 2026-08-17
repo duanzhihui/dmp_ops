@@ -14,6 +14,7 @@ Ensure_Options_Conf "${ds_dir}"
 . ./include/color.sh
 . ./include/check_env.sh
 . ./include/monitor_dolphinscheduler.sh
+. ./include/cluster.sh
 
 Show_Help() {
   echo
@@ -23,6 +24,10 @@ Show_Help() {
   --check                     Run health check
   --loop [interval]           Continuous monitoring (default: 60s)
   --recovery                  Enable auto-recovery on failure
+
+  In cluster mode, run this script on the control node (the one configured
+  with 'ips' in options.conf). It will SSH into every node and report the
+  health of the whole cluster from one place.
   "
 }
 
@@ -152,23 +157,45 @@ Run_Health_Check() {
 
 # Main logic
 Main() {
+  # Initialize local_ip (used by Is_Local_Node in cluster mode)
+  Detect_Network > /dev/null
+
+  local is_cluster=n
+  [ "${deploy_mode}" == "cluster" ] && is_cluster=y
+
   if [ "${status_flag}" == "y" ]; then
-    Show_Status
+    if [ "${is_cluster}" == "y" ]; then
+      Show_Cluster_Status_Monitor
+    else
+      Show_Status
+    fi
     exit 0
   fi
 
   if [ "${loop_flag}" == "y" ]; then
-    Monitor_Loop ${loop_interval}
+    if [ "${is_cluster}" == "y" ]; then
+      Monitor_Cluster_Loop ${loop_interval}
+    else
+      Monitor_Loop ${loop_interval}
+    fi
     exit 0
   fi
 
   if [ "${check_flag}" == "y" ]; then
-    Run_Health_Check
+    if [ "${is_cluster}" == "y" ]; then
+      Run_Cluster_Health_Check
+    else
+      Run_Health_Check
+    fi
     exit $?
   fi
 
   # Default: show status
-  Show_Status
+  if [ "${is_cluster}" == "y" ]; then
+    Show_Cluster_Status_Monitor
+  else
+    Show_Status
+  fi
 }
 
 Main
