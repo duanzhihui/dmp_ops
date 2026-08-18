@@ -5,7 +5,7 @@
 # 说明: 所有可配置参数集中管理，安装/备份/监控脚本均从此文件读取配置
 
 # ===== 配置版本号（勿手动修改，由 options.conf.template 同步）=====
-conf_version=1
+conf_version=2
 
 # ===== 镜像源配置 =====
 mirror_link=https://mirrors.oneinstack.com
@@ -73,3 +73,29 @@ disk_threshold=85
 repl_lag_threshold=60
 # 慢查询数量告警阈值
 slow_query_threshold=100
+
+# ===== MGR 双活配置 (Group Replication, single-primary) =====
+# 说明: MGR 单主模式 = 一写多读 + 主挂自动选新主，并非"双写双活"。
+#       多主双写需改 group_replication_single_primary_mode=OFF，当前脚本未实现。
+# 是否启用 MGR (0=单机, 1=MGR 节点)
+mgr_enable=0
+# MGR 模式: single-primary (当前仅支持单主)
+mgr_mode=single-primary
+# group 名称 (UUID, 全组一致; 用 uuidgen 生成)
+mgr_group_name=
+# 本节点 group 通信地址 (本机IP:通信端口)
+mgr_local_address=
+# group 通信端口 (默认 33061)
+mgr_comm_port=33061
+# 种子节点列表 (逗号分隔: ip1:port,ip2:port,...)
+mgr_group_seeds=
+# 是否引导启动新 group (仅首个节点设 1, 启动后自动改回 0)
+mgr_bootstrap=0
+# 复制用户 (用于 group_replication_recovery 通道)
+mgr_recovery_user=mgr_repl
+# 复制用户密码 (留空则安装时自动生成)
+mgr_recovery_pwd=
+# MGR 通信 SSL 模式: DISABLED / REQUIRED / VERIFY_CA / VERIFY_IDENTITY
+mgr_ssl_mode=DISABLED
+# 本节点 server-id (MGR 启用时必填, 全组唯一; 留空则按 IP 末段生成)
+mgr_server_id=

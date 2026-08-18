@@ -13,6 +13,7 @@ mysql/
 ├── backup_setup.sh         # 备份策略配置向导
 ├── monitor.sh              # 健康检查与状态监控
 ├── reset_password.sh       # 重置 root 密码工具
+├── mgr_setup.sh            # MGR 双活配置主入口
 ├── options.conf            # 中央配置文件
 ├── versions.txt            # 版本号清单
 ├── include/                # 功能模块库
@@ -24,7 +25,8 @@ mysql/
 │   ├── mysql-8.4.sh        # MySQL 8.4 安装模块
 │   ├── mysql-8.0.sh        # MySQL 8.0 安装模块
 │   ├── upgrade_db.sh       # 升级模块
-│   └── monitor_mysql.sh    # 监控模块
+│   ├── monitor_mysql.sh    # 监控模块
+│   └── mgr_setup.sh        # MGR 操作模块库
 ├── config/                 # 配置文件模板
 │   └── my.cnf              # MySQL 配置模板
 ├── tools/                  # 辅助工具
@@ -102,6 +104,100 @@ mysql/
 # 指定新密码
 ./reset_password.sh -p newpassword
 ```
+
+### MGR 双活部署
+
+MySQL Group Replication（MGR）单主模式：一写多读 + 主挂自动选新主，**并非"双写双活"**。
+多主双写需改 `group_replication_single_primary_mode=OFF`，当前脚本未实现。
+
+#### 前置条件
+
+- **≥3 节点**（MGR 要求多数派，2 节点无法容忍单点故障）
+- 所有节点 **同版本同配置**（MySQL 8.0 或 8.4）
+- 节点间网络互通，开放 **3306**（MySQL）与 **33061**（MGR 通信）端口
+- 主机名解析正常（`hostname -I` 能返回正确 IP）
+
+#### 配置示例（3 节点）
+
+在每个节点的 `options.conf` 中配置 MGR 段：
+
+```bash
+# 节点1 (192.168.1.10) - 首节点，负责引导
+mgr_enable=1
+mgr_group_name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee   # 全组一致，用 uuidgen 生成
+mgr_local_address=192.168.1.10:33061
+mgr_group_seeds=192.168.1.10:33061,192.168.1.11:33061,192.168.1.12:33061
+mgr_bootstrap=1                                        # 仅首节点设 1
+mgr_server_id=10                                       # 全组唯一
+
+# 节点2 (192.168.1.11)
+mgr_enable=1
+mgr_group_name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee   # 与节点1相同
+mgr_local_address=192.168.1.11:33061
+mgr_group_seeds=192.168.1.10:33061,192.168.1.11:33061,192.168.1.12:33061
+mgr_bootstrap=0
+mgr_server_id=11
+
+# 节点3 (192.168.1.12)
+mgr_enable=1
+mgr_group_name=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee
+mgr_local_address=192.168.1.12:33061
+mgr_group_seeds=192.168.1.10:33061,192.168.1.11:33061,192.168.1.12:33061
+mgr_bootstrap=0
+mgr_server_id=12
+```
+
+#### 操作流程
+
+```bash
+# 1. 各节点安装 MySQL（mgr_enable=1 会自动配置 GTID/ROW/MGR 参数并安装插件）
+./install.sh --mysql_option 0 -q
+
+# 2. 首节点引导启动新 group
+./mgr_setup.sh --bootstrap
+
+# 3. 其余节点加入现有 group
+./mgr_setup.sh --join
+
+# 4. 验证 group 状态
+./mgr_setup.sh --status
+```
+
+#### MGR 管理
+
+```bash
+./mgr_setup.sh --bootstrap              # 引导启动新 group（仅首节点）
+./mgr_setup.sh --join                   # 加入现有 group
+./mgr_setup.sh --remove                 # 退出 group
+./mgr_setup.sh --status                 # 查看 group 成员与状态
+./mgr_setup.sh --set-primary <id>       # 强制切换主
+./mgr_setup.sh --check                  # 前置条件检查
+./mgr_setup.sh --install-plugin         # 仅安装 group_replication 插件
+```
+
+#### MGR 监控
+
+```bash
+# 检查 MGR group 状态
+./monitor.sh --mgr
+
+# 完整健康检查（mgr_enable=1 时自动检查 MGR，跳过传统主从复制）
+./monitor.sh --check
+
+# cron 定时监控
+*/5 * * * * /path/to/mysql/monitor.sh --check -q
+```
+
+#### 注意事项
+
+1. **单主模式语义**：仅 PRIMARY 节点可写，SECONDARY 节点只读。主节点故障时自动选举新主。
+2. **`performance_schema` 改 ON**：MGR 依赖 performance_schema，启用后增加约 100-400MB 内存占用（视连接数）。
+3. **`binlog_format` 改 ROW**：MGR 要求 ROW 格式，日志体积大于 mixed。
+4. **`conf_version` 升级**：从旧版升级时 `options.conf` 会自动备份为 `options.conf.1` 并从模板重建，
+   需从备份文件回填 `dbrootpwd` 等旧值。
+5. **`server-id` 唯一性**：`mgr_server_id` 留空时按本机 IP 末段生成，需手工确认全组唯一。
+6. **MySQL 8.0 vs 8.4 参数差异**：8.0 需要 `transaction_write_set_extraction=XXHASH64` 等参数，
+   8.4 已废弃这些参数（写入会报错）。脚本按版本自动适配。
 
 ## 支持的系统
 

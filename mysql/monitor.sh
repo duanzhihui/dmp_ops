@@ -30,16 +30,18 @@ Show_Help() {
   echo "  -s, --status    Show MySQL status report"
   echo "  -c, --check     Run health checks"
   echo "  -a, --all       Run all checks and show status"
+  echo "  --mgr           Check MGR group status"
   echo "  -q, --quiet     Quiet mode (only output on errors)"
   echo ""
   echo "Examples:"
   echo "  $0              Interactive mode"
   echo "  $0 --check      Run health checks"
   echo "  $0 --status     Show status report"
+  echo "  $0 --mgr        Check MGR group status"
 }
 
 # 解析命令行参数
-TEMP=$(getopt -o hscaq --long help,status,check,all,quiet -- "$@" 2>/dev/null)
+TEMP=$(getopt -o hscaq --long help,status,check,all,mgr,quiet -- "$@" 2>/dev/null)
 [ $? != 0 ] && { echo "${CWARNING}ERROR: Invalid arguments!${CEND}"; Show_Help; exit 1; }
 eval set -- "${TEMP}"
 
@@ -59,6 +61,9 @@ while :; do
       ;;
     -a|--all)
       action="all"; shift 1
+      ;;
+    --mgr)
+      action="mgr"; shift 1
       ;;
     -q|--quiet)
       quiet_flag=y; shift 1
@@ -99,6 +104,9 @@ case "${action}" in
     echo ""
     Monitor_MySQL_Status
     ;;
+  mgr)
+    Check_MySQL_MGR
+    ;;
   *)
     # 交互式菜单
     echo ""
@@ -107,6 +115,7 @@ case "${action}" in
     echo "  1. Run health checks"
     echo "  2. Show status report"
     echo "  3. Run all checks and show status"
+    echo "  4. Check MGR group status"
     echo "  q. Quit"
     echo ""
     
@@ -123,6 +132,9 @@ case "${action}" in
         Monitor_MySQL_All
         echo ""
         Monitor_MySQL_Status
+        ;;
+      4)
+        Check_MySQL_MGR
         ;;
       q|Q)
         exit 0

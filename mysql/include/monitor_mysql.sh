@@ -62,7 +62,7 @@ Check_MySQL_Connections() {
   return 0
 }
 
-# 检查复制状态（从库）
+# 检查复制状态（从库，传统主从复制场景）
 Check_MySQL_Replication() {
   local slave_status=$(${db_install_dir}/bin/mysql -uroot -p${dbrootpwd} -e "SHOW SLAVE STATUS\G" 2>/dev/null)
   
@@ -100,6 +100,65 @@ Check_MySQL_Replication() {
   fi
   
   echo "${CSUCCESS}[OK] MySQL replication is healthy (lag: ${seconds_behind}s)${CEND}"
+  return 0
+}
+
+# 检查 MGR (Group Replication) 状态
+Check_MySQL_MGR() {
+  local members=$(${db_install_dir}/bin/mysql -uroot -p${dbrootpwd} -N -e \
+    "SELECT MEMBER_ID, MEMBER_HOST, MEMBER_STATE, MEMBER_ROLE \
+     FROM performance_schema.replication_group_members;" 2>/dev/null)
+
+  if [ -z "${members}" ]; then
+    echo "${CFAILURE}[CRITICAL] This node is not in any MGR group (no members found)${CEND}"
+    Send_Alert "CRITICAL: MGR node not in any group on $(hostname)"
+    return 1
+  fi
+
+  local has_critical=0
+  local has_warning=0
+
+  # 逐行检查成员状态
+  while IFS=$'\t' read -r mid mhost mstate mrole; do
+    [ -z "${mid}" ] && continue
+    case "${mstate}" in
+      ONLINE)
+        echo "${CSUCCESS}[OK] ${mhost} state=${mstate} role=${mrole}${CEND}"
+        ;;
+      RECOVERING)
+        echo "${CWARNING}[WARNING] ${mhost} is RECOVERING${CEND}"
+        has_warning=1
+        ;;
+      OFFLINE|UNREACHABLE|ERROR|*)
+        echo "${CFAILURE}[CRITICAL] ${mhost} state=${mstate} role=${mrole}${CEND}"
+        Send_Alert "CRITICAL: MGR member ${mhost} state=${mstate} on $(hostname)"
+        has_critical=1
+        ;;
+    esac
+  done <<< "${members}"
+
+  # 单主模式：检查全组是否有 PRIMARY
+  local primary_count=$(${db_install_dir}/bin/mysql -uroot -p${dbrootpwd} -N -e \
+    "SELECT COUNT(*) FROM performance_schema.replication_group_members WHERE MEMBER_ROLE='PRIMARY' AND MEMBER_STATE='ONLINE';" 2>/dev/null)
+  if [ "${primary_count}" != "1" ]; then
+    echo "${CFAILURE}[CRITICAL] No ONLINE PRIMARY in group (count=${primary_count:-0})${CEND}"
+    Send_Alert "CRITICAL: MGR group has no ONLINE PRIMARY on $(hostname)"
+    has_critical=1
+  fi
+
+  # 检查事务队列 lag（通过 member_stats）
+  local lag_threshold=${repl_lag_threshold:-60}
+  local queue_size=$(${db_install_dir}/bin/mysql -uroot -p${dbrootpwd} -N -e \
+    "SELECT IFNULL(MAX(TRANSACTIONS_QUEUE),0) FROM performance_schema.replication_group_member_stats;" 2>/dev/null)
+  if [ -n "${queue_size}" ] && [ "${queue_size}" -gt 0 ] 2>/dev/null; then
+    echo "${CWARNING}[WARNING] MGR transactions queue: ${queue_size}${CEND}"
+    [ ${queue_size} -gt ${lag_threshold} ] && {
+      Send_Alert "WARNING: MGR queue lag ${queue_size} on $(hostname)"
+      has_warning=1
+    }
+  fi
+
+  [ ${has_critical} -eq 1 ] && return 1
   return 0
 }
 
@@ -229,7 +288,12 @@ Monitor_MySQL_All() {
   Check_MySQL_Process
   Check_MySQL_Port 3306
   Check_MySQL_Connections
-  Check_MySQL_Replication
+  # MGR 启用时检查 group 状态，跳过传统主从复制检查（避免误报 "not a slave"）
+  if [ "${mgr_enable}" == "1" ]; then
+    Check_MySQL_MGR
+  else
+    Check_MySQL_Replication
+  fi
   Check_MySQL_SlowQueries
   Check_MySQL_Disk
   

@@ -175,6 +175,42 @@ Install_MySQL80() {
   # 14. 保存密码到配置文件
   sed -i "s+^dbrootpwd.*+dbrootpwd='${dbrootpwd}'+" ${mysql_dir}/options.conf
 
+  # 14.1 MGR 衔接（mgr_enable=1 时）
+  if [ "${mgr_enable}" == "1" ]; then
+    echo "${CMSG}Configuring MGR (Group Replication)...${CEND}"
+    # 安装 group_replication 插件（幂等）
+    ${mysql_install_dir}/bin/mysql -uroot -p${dbrootpwd} -e \
+      "INSTALL PLUGIN group_replication SONAME 'group_replication.so';" 2>/dev/null
+    # 生成复制用户密码（留空时自动生成）
+    if [ -z "${mgr_recovery_pwd}" ]; then
+      mgr_recovery_pwd=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c16)
+      sed -i "s+^mgr_recovery_pwd.*+mgr_recovery_pwd='${mgr_recovery_pwd}'+" ${mysql_dir}/options.conf
+    fi
+    # 创建/重置复制用户
+    ${mysql_install_dir}/bin/mysql -uroot -p${dbrootpwd} -e \
+      "CREATE USER IF NOT EXISTS '${mgr_recovery_user}'@'%' IDENTIFIED BY '${mgr_recovery_pwd}';"
+    ${mysql_install_dir}/bin/mysql -uroot -p${dbrootpwd} -e \
+      "GRANT REPLICATION SLAVE ON *.* TO '${mgr_recovery_user}'@'%'; FLUSH PRIVILEGES;"
+
+    if [ "${mgr_bootstrap}" == "1" ]; then
+      # 引导启动新 group
+      echo "${CMSG}Bootstrapping MGR group...${CEND}"
+      ${mysql_install_dir}/bin/mysql -uroot -p${dbrootpwd} -e \
+        "SET GLOBAL group_replication_bootstrap_group=ON; START GROUP_REPLICATION; SET GLOBAL group_replication_bootstrap_group=OFF;"
+      local mgr_state=$(${mysql_install_dir}/bin/mysql -uroot -p${dbrootpwd} -N -e \
+        "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_HOST=@@hostname;" 2>/dev/null)
+      if [ "${mgr_state}" == "ONLINE" ]; then
+        echo "${CSUCCESS}MGR group bootstrapped, this node is ONLINE/PRIMARY${CEND}"
+        # 引导成功后自动改回 0，避免下次重启重复引导
+        sed -i 's/^mgr_bootstrap=1/mgr_bootstrap=0/' ${mysql_dir}/options.conf
+      else
+        echo "${CFAILURE}MGR bootstrap failed! Check error log: ${mysql_data_dir}/mysql-error.log${CEND}"
+      fi
+    else
+      echo "${CMSG}MGR configured. Run './mgr_setup.sh --join' to join existing group.${CEND}"
+    fi
+  fi
+
   # 15. 清理源码包
   rm -rf mysql-${mysql80_ver}* boost_*
 
@@ -185,6 +221,23 @@ Install_MySQL80() {
 
 # 生成 MySQL 8.0 配置文件
 Generate_MySQL80_Config() {
+  # 计算 server-id：MGR 启用时取 mgr_server_id，留空则按本机 IP 末段；单机保持 1
+  if [ "${mgr_enable}" == "1" ]; then
+    if [ -n "${mgr_server_id}" ]; then
+      server_id=${mgr_server_id}
+    else
+      local ip_last=$(hostname -I 2>/dev/null | awk '{print $1}' | awk -F. '{print $4}')
+      server_id=${ip_last:-1}
+      [ "${server_id}" -lt 1 ] 2>/dev/null && server_id=1
+    fi
+    local binlog_format_val=ROW
+    local perf_schema_val=1
+  else
+    server_id=1
+    local binlog_format_val=mixed
+    local perf_schema_val=0
+  fi
+
   cat > /etc/my.cnf << EOF
 [client]
 port = 3306
@@ -204,7 +257,7 @@ datadir = ${mysql_data_dir}
 pid-file = ${mysql_data_dir}/mysql.pid
 user = mysql
 bind-address = 0.0.0.0
-server-id = 1
+server-id = ${server_id}
 
 init-connect = 'SET NAMES utf8mb4'
 character-set-server = utf8mb4
@@ -233,7 +286,7 @@ thread_cache_size = 8
 ft_min_word_len = 4
 
 log_bin = mysql-bin
-binlog_format = mixed
+binlog_format = ${binlog_format_val}
 binlog_expire_logs_seconds = 604800
 
 log_error = ${mysql_data_dir}/mysql-error.log
@@ -241,7 +294,7 @@ slow_query_log = 1
 long_query_time = 1
 slow_query_log_file = ${mysql_data_dir}/mysql-slow.log
 
-performance_schema = 0
+performance_schema = ${perf_schema_val}
 explicit_defaults_for_timestamp
 
 skip-external-locking
@@ -276,6 +329,34 @@ sort_buffer_size = 8M
 read_buffer = 4M
 write_buffer = 4M
 EOF
+
+  # MGR 启用时追加 GTID + Group Replication 配置块
+  # 注意: MySQL 8.0 需要 transaction_write_set_extraction / master_info_repository /
+  #       relay_log_info_repository，8.4 已废弃这些参数。
+  if [ "${mgr_enable}" == "1" ]; then
+    cat >> /etc/my.cnf << EOF
+
+# === MGR (Group Replication, single-primary) ===
+gtid_mode = ON
+enforce_gtid_consistency = ON
+log_slave_updates = 1
+relay_log = relay-bin
+relay_log_recovery = ON
+binlog_row_image = FULL
+plugin_dir = ${mysql_install_dir}/lib/plugin
+# MySQL 8.0 专属参数（8.4 已废弃）
+transaction_write_set_extraction = XXHASH64
+master_info_repository = TABLE
+relay_log_info_repository = TABLE
+group_replication_group_name = ${mgr_group_name}
+group_replication_local_address = ${mgr_local_address}
+group_replication_group_seeds = ${mgr_group_seeds}
+group_replication_bootstrap_group = OFF
+group_replication_start_on_boot = OFF
+group_replication_single_primary_mode = ON
+group_replication_ssl_mode = ${mgr_ssl_mode}
+EOF
+  fi
 
   # 根据内存大小调整配置
   if [ ${Mem} -gt 1500 ] && [ ${Mem} -le 3500 ]; then

@@ -18,7 +18,8 @@ mysql/
 ├── backup_setup.sh         # 备份策略配置向导
 ├── monitor.sh              # 健康检查与状态监控
 ├── reset_password.sh       # 重置 root 密码工具
-├── options.conf            # 中央配置文件（路径、密码、备份参数）
+├── mgr_setup.sh            # MGR 双活配置主入口（bootstrap/join/remove/status）
+├── options.conf            # 中央配置文件（路径、密码、备份参数、MGR 配置）
 ├── versions.txt            # 版本号清单
 ├── include/                # 功能模块库
 │   ├── color.sh            #   终端颜色定义
@@ -29,7 +30,8 @@ mysql/
 │   ├── mysql-8.4.sh        #   MySQL 8.4 安装模块
 │   ├── mysql-8.0.sh        #   MySQL 8.0 安装模块
 │   ├── upgrade_db.sh       #   MySQL 升级模块
-│   └── monitor_mysql.sh    #   MySQL 监控检查模块
+│   ├── monitor_mysql.sh    #   MySQL 监控检查模块
+│   └── mgr_setup.sh        #   MGR 操作模块库
 ├── config/                 # 配置文件模板
 │   └── my.cnf              #   MySQL 配置模板
 ├── tools/                  # 辅助工具脚本
@@ -332,6 +334,63 @@ EOF
 }
 ```
 
+### 2.7 MGR 双活模块 (mgr_setup.sh)
+
+MGR 单主模式（single-primary）：一写多读 + 主挂自动选新主，并非"双写双活"。
+
+```bash
+# 前置条件检查（不执行变更）
+MGR_Check_Prerequisites() {
+  [ "${mgr_enable}" != "1" ] && { echo "mgr_enable != 1"; return 1; }
+  [ -z "${mgr_group_name}" ] && { echo "mgr_group_name empty"; return 1; }
+  [ -z "${mgr_local_address}" ] && { echo "mgr_local_address empty"; return 1; }
+  [ -z "${mgr_group_seeds}" ] && { echo "mgr_group_seeds empty"; return 1; }
+  # 检查运行时参数
+  local gtid=$(MGR_Mysql -N -e "SELECT @@global.gtid_mode;")
+  local bfmt=$(MGR_Mysql -N -e "SELECT @@global.binlog_format;")
+  [ "${gtid}" != "ON" ] && return 1
+  [ "${bfmt}" != "ROW" ] && return 1
+}
+
+# 引导启动新 group（仅首个节点）
+MGR_Bootstrap() {
+  MGR_Check_Prerequisites || return 1
+  MGR_Install_Plugin
+  MGR_Create_Recovery_User
+  MGR_Mysql -e "SET GLOBAL group_replication_bootstrap_group=ON; \
+    START GROUP_REPLICATION; \
+    SET GLOBAL group_replication_bootstrap_group=OFF;"
+  # 轮询等待 ONLINE
+  local i=0 state=""
+  while [ ${i} -lt 30 ]; do
+    state=$(MGR_Mysql -N -e "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_HOST=@@hostname;")
+    [ "${state}" == "ONLINE" ] && break
+    sleep 1; i=$((i + 1))
+  done
+  [ "${state}" == "ONLINE" ] && sed -i 's/^mgr_bootstrap=1/mgr_bootstrap=0/' ${mysql_dir}/options.conf
+}
+
+# 加入现有 group（8.0 用 CHANGE MASTER TO，8.4 用 CHANGE REPLICATION SOURCE TO）
+MGR_Join() {
+  MGR_Check_Prerequisites || return 1
+  MGR_Install_Plugin
+  MGR_Create_Recovery_User
+  local ver=$(MGR_Version_Adapt)
+  if [ "${ver}" == "8.4" ]; then
+    MGR_Mysql -e "CHANGE REPLICATION SOURCE TO SOURCE_USER='${mgr_recovery_user}', SOURCE_PASSWORD='${mgr_recovery_pwd}' FOR CHANNEL 'group_replication_recovery';"
+  else
+    MGR_Mysql -e "CHANGE MASTER TO MASTER_USER='${mgr_recovery_user}', MASTER_PASSWORD='${mgr_recovery_pwd}' FOR CHANNEL 'group_replication_recovery';"
+  fi
+  MGR_Mysql -e "START GROUP_REPLICATION;"
+}
+
+# 强制切换主（单主模式）
+MGR_Set_Primary() {
+  local target_id=$1
+  MGR_Mysql -e "SELECT group_replication_set_as_primary('${target_id}');"
+}
+```
+
 ## 3. 公共库函数
 
 ### 3.1 颜色输出 (color.sh)
@@ -448,6 +507,8 @@ jemalloc_ver=5.3.0
 15. reset_password.sh — 密码重置工具
 16. tools/db_bk.sh — 单库备份脚本
 17. config/my.cnf — MySQL 配置模板
+18. mgr_setup.sh — MGR 双活配置主入口
+19. include/mgr_setup.sh — MGR 操作模块库
 
 # 代码规范
 1. Shell 版本: #!/bin/bash
@@ -484,3 +545,9 @@ jemalloc_ver=5.3.0
 | 内存调优 | 根据 Mem 变量调整 innodb_buffer_pool_size | 自动适配 |
 | 多源下载 | mirrors.oneinstack.com → 官方源 | 下载可靠性 |
 | 服务管理 | init.d/mysqld + chkconfig/update-rc.d | 兼容 RHEL/Debian |
+| MGR 引导幂等 | `SELECT MEMBER_STATE ... WHERE MEMBER_HOST=@@hostname` | 已 ONLINE 则跳过 |
+| MGR 引导复位 | `sed -i 's/^mgr_bootstrap=1/mgr_bootstrap=0/'` | 引导成功后自动改回 0 |
+| MGR 版本适配 | 8.0 用 `CHANGE MASTER TO`，8.4 用 `CHANGE REPLICATION SOURCE TO` | 语法差异 |
+| MGR server-id | `mgr_server_id` 留空时按 IP 末段生成 | 全组唯一 |
+| MGR 参数差异 | 8.0 需 `transaction_write_set_extraction=XXHASH64`，8.4 已废弃 | 按版本渲染 |
+| MGR 条件渲染 | `mgr_enable=1` 时追加 GTID/ROW/group_replication 块 | 单机不受影响 |
