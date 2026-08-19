@@ -11,7 +11,7 @@ src_dir="${script_dir}/src"
 [ "$(id -u)" != "0" ] && { echo "Error: You must be root to run this script"; exit 1; }
 
 . "${script_dir}/include/ensure_options_conf.sh"
-Ensure_Options_Conf "${script_dir}"
+Ensure_Options_Conf "${script_dir}" || exit 1
 . "${script_dir}/options.conf"
 . "${script_dir}/versions.txt"
 . "${script_dir}/include/color.sh"

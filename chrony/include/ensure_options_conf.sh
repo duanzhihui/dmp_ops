@@ -14,8 +14,12 @@ Ensure_Options_Conf() {
   local tmpl="${module_dir}/options.conf.template"
   local conf="${module_dir}/options.conf"
 
-  # 模板不存在，兼容无模板场景
-  [ -f "${tmpl}" ] || return 0
+  # 模板不存在：有 options.conf 则兼容旧场景，否则属于分发缺失，必须报错
+  if [ ! -f "${tmpl}" ]; then
+    [ -f "${conf}" ] && return 0
+    echo "Error: 缺少 ${tmpl} 且 ${conf} 不存在，无法继续（分发包可能不完整）" >&2
+    return 1
+  fi
 
   # 读取模板版本号
   local tmpl_ver

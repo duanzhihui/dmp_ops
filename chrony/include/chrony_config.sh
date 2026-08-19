@@ -192,19 +192,36 @@ Generate_Client_Conf() {
 }
 
 # 校验 chrony 配置文件语法
+# 注意: Ubuntu/Debian 的 AppArmor profile(usr.sbin.chronyd) 只允许 chronyd 读取
+#       /etc/chrony/** 等固定路径，直接校验 /tmp 下的渲染文件会报 Permission denied
+#       （即使以 root 运行）。因此先把待校验文件复制到 chrony_conf 所在目录再校验。
 Validate_Chrony_Conf() {
   local file="$1"
   command -v chronyd > /dev/null 2>&1 || return 0
 
+  [ -z "${chrony_conf}" ] && Detect_Chrony_Path
+
+  # 文件名刻意不以 .conf 结尾，避免被 confdir/sourcedir 的通配规则加载
+  local probe="${file}"
+  local conf_dir
+  conf_dir=$(dirname "${chrony_conf}")
+  if [ -d "${conf_dir}" ] || mkdir -p "${conf_dir}" 2>/dev/null; then
+    probe="${conf_dir}/.chrony-validate.$$.tmp"
+    /bin/cp -f "${file}" "${probe}" 2>/dev/null && chmod 644 "${probe}" || probe="${file}"
+  fi
+
   # 优先使用 -p（打印配置并退出，不产生网络请求、不修改时钟）
-  local msg
-  msg=$(chronyd -p -f "${file}" 2>&1)
-  [ $? -eq 0 ] && return 0
+  local msg rc
+  msg=$(chronyd -p -f "${probe}" 2>&1)
+  rc=$?
 
   # 部分老版本不支持 -p，退化为 -Q（只查询不修改时钟）
-  if echo "${msg}" | grep -qiE 'invalid option|unrecognized|usage:'; then
-    timeout 20 chronyd -Q -t 3 -f "${file}" > /dev/null 2>&1 && return 0
+  if [ ${rc} -ne 0 ] && echo "${msg}" | grep -qiE 'invalid option|unrecognized|usage:'; then
+    timeout 20 chronyd -Q -t 3 -f "${probe}" > /dev/null 2>&1 && rc=0
   fi
+
+  [ "${probe}" != "${file}" ] && rm -f "${probe}"
+  [ ${rc} -eq 0 ] && return 0
 
   echo "${CFAILURE}配置语法校验失败，详细信息：${CEND}"
   echo "${msg}" | head -20

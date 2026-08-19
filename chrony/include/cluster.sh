@@ -116,9 +116,12 @@ Deploy_Node() {
     return 1
   }
 
-  # 2. 分发脚本（排除本地 options.conf，避免覆盖远端角色配置）
+  # 2. 分发脚本（排除本地 options.conf 及其备份，避免覆盖远端角色配置；
+  #    但必须保留 options.conf.template，远端靠它生成 options.conf）
   tar czf "${pkg}" -C "${script_dir}" \
-      --exclude='options.conf' --exclude='options.conf.*' --exclude='src/*.tar.gz' . 2>/dev/null
+      --exclude='./options.conf' --exclude='./options.conf.bak*' \
+      --exclude='./options.conf.[0-9]*' --exclude='./options.conf.tmp.*' \
+      --exclude='src/*.tar.gz' . 2>/dev/null
   scp ${SSH_OPTS} -P "${self_port}" -q "${pkg}" "${self_user}@${self_addr}:${remote_dir}/" || {
     echo "${CFAILURE}[${self_addr}] 分发失败${CEND}"
     rm -f "${pkg}"
