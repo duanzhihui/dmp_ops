@@ -1,0 +1,82 @@
+# Chrony 运维中央配置模板
+# 说明: 本文件由 git 跟踪，运行时由 include/ensure_options_conf.sh 生成 options.conf
+#       修改本模板后请递增 conf_version，用户下次执行脚本时会自动备份旧配置并重建
+
+# ===== 配置版本号（勿手动修改，由 options.conf.template 同步）=====
+conf_version=1
+
+# ===== 安装方式 =====
+# package: 包管理器安装（推荐，chrony 是发行版默认组件）
+# source : 源码编译安装（仅当仓库版本过低时使用）
+install_method=package
+
+# ===== 部署角色 =====
+# server: 内网 NTP 服务端（同步公网上游 + 对内网提供服务）
+# client: NTP 客户端（同步指定上游）
+chrony_role=client
+
+# ===== 部署模式 =====
+# standalone: 单机（client 直连公网源）
+# cluster   : 集群（server + 多 client）
+deploy_mode=standalone
+
+# ===== 时区（集群内所有节点必须一致）=====
+timezone=Asia/Shanghai
+
+# ===== 上游 NTP 源（server 角色 / 单机 client 使用，逗号分隔）=====
+upstream_ntp_servers=ntp.aliyun.com,ntp1.aliyun.com,cn.pool.ntp.org,ntp.tuna.tsinghua.edu.cn
+
+# ===== 内网 NTP Server 地址（cluster 模式下 client 指向它，逗号分隔）=====
+ntp_server_hosts=
+
+# ===== 集群 Client 节点清单（cluster.sh 批量部署用，逗号分隔）=====
+ntp_client_hosts=
+
+# ===== Server 角色专属 =====
+# 允许同步的网段，逗号分隔，如 10.0.0.0/24,192.168.1.0/24
+allow_networks=
+# 对等 Server（双 Server 高可用），逗号分隔
+peer_servers=
+# 外网不可达时的孤岛层级（10 表示本机作为 stratum 10 时间源）
+local_stratum=10
+
+# ===== chrony 运行参数 =====
+# 记录测量日志（调试用，生产可留空）；启用填 "log measurements statistics tracking"
+log_measurements=
+# 是否自动放行防火墙 123/udp（server 角色）: y/n
+open_firewall=y
+# 安装后是否执行 chronyc makestep 立即强制校时: y/n
+# 注意: 时间跳变会影响运行中的数据库/中间件，生产环境请在维护窗口执行
+force_makestep=y
+
+# ===== SSH 批量部署（cluster 模式）=====
+ssh_user=root
+ssh_port=22
+remote_dir=/tmp/dmp_ops_chrony
+
+# ===== 监控告警 =====
+# 时间偏移告警阈值（秒）
+offset_threshold=1
+alert_email=
+webhook_url=
+log_dir=/var/log/chrony
+
+# ===== 备份配置 =====
+backup_dir=/data/backup/chrony
+expired_days=7
+# local,remote
+backup_destination=local
+# conf
+backup_content=conf
+# remote 目标（backup_destination 含 remote 时生效）
+remote_host=
+remote_port=22
+remote_user=root
+remote_dir_backup=/data/backup/chrony
+
+# ===== 自动检测（运行时由脚本填充，勿手动修改）=====
+chrony_conf=
+chrony_keys=
+chrony_service=
+chrony_user=
+drift_file=

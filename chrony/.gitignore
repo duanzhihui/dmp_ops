@@ -1,0 +1,12 @@
+# 运行时生成的配置文件（由 options.conf.template 同步，勿提交）
+options.conf
+options.conf.bak
+options.conf.bak.*
+options.conf.[0-9]*
+
+# 源码包
+src/*.tar.gz
+src/*.tar.gz.*
+
+# 运行时生成的临时配置
+config/*.rendered

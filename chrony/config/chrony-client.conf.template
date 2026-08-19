@@ -1,0 +1,27 @@
+# ===== Chrony NTP Client 配置 =====
+# 由 dmp_ops/chrony 自动生成，勿手工修改（重新执行 install.sh 会被覆盖）
+
+# 时间源：集群模式指向内网 NTP Server，单机模式指向公网上游
+{{UPSTREAM_SERVERS}}
+
+# 系统时钟增益/损失速率记录文件
+driftfile {{DRIFT_FILE}}
+
+# 前 3 次校时若偏移大于 1 秒则直接跳变（而非缓慢 slew）
+makestep 1.0 3
+
+# 同步到 RTC 硬件时钟
+rtcsync
+
+# 客户端不对外提供 NTP 服务（不配置 allow）
+
+# 命令端口监听地址（仅本机，安全）
+bindcmdaddress 127.0.0.1
+bindcmdaddress ::1
+
+# 密钥文件
+keyfile {{KEYS_FILE}}
+
+# 日志
+logdir /var/log/chrony
+{{LOG_MEASUREMENTS}}

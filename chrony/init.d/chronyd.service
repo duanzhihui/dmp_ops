@@ -1,0 +1,22 @@
+[Unit]
+Description=chrony NTP client/server
+Documentation=man:chronyd(8) man:chrony.conf(5)
+After=network.target
+Conflicts=ntpd.service systemd-timesyncd.service openntpd.service
+
+[Service]
+Type=forking
+PIDFile=/run/chrony/chronyd.pid
+PermissionsStartOnly=true
+ExecStartPre=/bin/mkdir -p /run/chrony
+ExecStartPre=/bin/chown chrony:chrony /run/chrony
+ExecStart=/usr/local/chrony/sbin/chronyd -f /etc/chrony.conf
+ExecStopPost=/bin/rm -f /run/chrony/chronyd.sock
+Restart=always
+RestartSec=5
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=full
+
+[Install]
+WantedBy=multi-user.target

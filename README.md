@@ -10,6 +10,7 @@
 |------|------|---------|---------|------|
 | [openjdk](./openjdk) | OpenJDK | 8 / 11 / 17 / 18 / 21 | 多版本共存 | 运行时基础环境，多版本共存、默认版本切换、JVM 监控诊断 |
 | [sshtrust](./sshtrust) | SSH 互信 | — | one-way / mesh | 集群部署前置工具，批量建立免密互信（单向 / 全互信网状） |
+| [chrony](./chrony) | Chrony 时间同步 | 发行版仓库版本（源码可选 4.6.1） | standalone / cluster | 集群部署前置工具，单机校时或内网 NTP Server + 多客户端时间同步 |
 | [mysql](./mysql) | MySQL | 5.7 / 8.0 / 8.4 | 单机 / MGR | 元数据库，含 MGR 单主集群、密码重置、多目标备份 |
 | [zookeeper](./zookeeper) | Apache ZooKeeper | 3.7.2 / 3.8.6 / 3.9.5 | standalone / cluster | 分布式协调服务，DolphinScheduler / SeaTunnel 集群依赖 |
 | [doris](./doris) | Apache Doris | 2.1.11 / 3.0.8 / 4.1.3 | standalone / integrated / separated | 实时分析型 MPP 数据库，支持存算一体与存算分离 |

@@ -1,0 +1,15 @@
+# Chrony 版本号清单
+# 说明: install_method=package 时忽略本文件，版本由发行版仓库决定
+#       install_method=source  时按 chrony_ver 下载源码编译
+
+chrony_ver=4.6.1
+
+# 各发行版仓库默认版本（参考，无需修改）
+# rhel7_chrony_ver=3.4
+# rhel8_chrony_ver=4.2
+# rhel9_chrony_ver=4.3
+# debian11_chrony_ver=4.0
+# debian12_chrony_ver=4.3
+# ubuntu2004_chrony_ver=3.5
+# ubuntu2204_chrony_ver=4.2
+# ubuntu2404_chrony_ver=4.5
