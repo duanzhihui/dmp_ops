@@ -319,20 +319,13 @@ myisam_max_sort_file_size = 10G
 
 interactive_timeout = 28800
 wait_timeout = 28800
-
-[mysqldump]
-quick
-max_allowed_packet = 500M
-
-[myisamchk]
-key_buffer_size = 8M
-sort_buffer_size = 8M
-read_buffer = 4M
-write_buffer = 4M
 EOF
 
   # MGR 启用时追加 GTID + Group Replication 配置块
-  # 注意: MySQL 8.4 已废弃 transaction_write_set_extraction / master_info_repository /
+  # 注意: 此处紧接 [mysqld] section（未出现新 section header），参数归属于 [mysqld]，
+  #       对 mysqld 生效。切勿把 MGR 块放到 [mysqldump]/[myisamchk] 之后，否则会被
+  #       归到那些 section 下而失效。
+  #       MySQL 8.4 已废弃 transaction_write_set_extraction / master_info_repository /
   #       relay_log_info_repository，此处不写，否则启动报错。
   if [ "${mgr_enable}" == "1" ]; then
     cat >> /etc/my.cnf << EOF
@@ -354,6 +347,20 @@ group_replication_single_primary_mode = ON
 group_replication_ssl_mode = ${mgr_ssl_mode}
 EOF
   fi
+
+  # 追加其余 section，放在 MGR 块之后，避免 MGR 参数被归到 [myisamchk] 下而失效
+  cat >> /etc/my.cnf << EOF
+
+[mysqldump]
+quick
+max_allowed_packet = 500M
+
+[myisamchk]
+key_buffer_size = 8M
+sort_buffer_size = 8M
+read_buffer = 4M
+write_buffer = 4M
+EOF
 
   # 根据内存大小调整配置
   if [ ${Mem} -gt 1500 ] && [ ${Mem} -le 3500 ]; then
