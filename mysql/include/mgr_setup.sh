@@ -339,26 +339,44 @@ MGR_Clone() {
     echo "${CSUCCESS}Clone initiated successfully${CEND}"
     echo "  ${CMSG}mysqld 将自动重启，等待恢复...${CEND}"
 
-    # 等待 mysqld 重启完成（clone 会导致 mysqld 自动重启）
-    local i=0
+    # clone 是物理全量复制（含 mysql 系统库），完成后本机 root 密码
+    # 会被替换为 donor 的 root 密码。等待时两个密码都试。
+    local i=0 ok=0
     sleep 3
     while [ ${i} -lt 120 ]; do
       if MGR_Mysql -e "SELECT 1;" >/dev/null 2>&1; then
-        break
+        ok=1; break
+      fi
+      # 本地密码连不上时，尝试 donor 的 recovery 密码（clone 后 root 密码可能已变）
+      if ${db_install_dir}/bin/mysql -uroot -p${mgr_recovery_pwd} --socket=/tmp/mysql.sock \
+           -e "SELECT 1;" >/dev/null 2>&1; then
+        ok=2; break
       fi
       sleep 1
       i=$((i + 1))
     done
 
-    if [ ${i} -lt 120 ]; then
+    if [ ${ok} -eq 1 ]; then
       echo "${CSUCCESS}mysqld restarted after clone${CEND}"
       local gtid=$(MGR_Mysql -N -e "SELECT @@global.gtid_executed;" 2>/dev/null)
       echo "  ${CMSG}gtid_executed: ${gtid:-<empty>}${CEND}"
       echo "  ${CMSG}下一步: 运行 ./mgr_setup.sh --join 加入 group${CEND}"
       return 0
     fi
+
+    if [ ${ok} -eq 2 ]; then
+      echo "${CSUCCESS}mysqld restarted after clone${CEND}"
+      echo "${CWARNING}[注意] 本机 root 密码已被 clone 覆盖为 donor 的 root 密码${CEND}"
+      echo "  options.conf 中的 dbrootpwd 已失效，需要更新为 donor 的 root 密码："
+      echo "    ${CMSG}sed -i \"s+^dbrootpwd.*+dbrootpwd='<donor的root密码>'+\" ${mysql_dir}/options.conf${CEND}"
+      echo "  更新后再运行 ./mgr_setup.sh --join"
+      return 1
+    fi
+
     echo "${CFAILURE}mysqld did not come back within 120s after clone${CEND}"
     echo "  检查: service mysqld status 或 /data/mysql/mysql-error.log"
+    echo "  ${CWARNING}提示: clone 会把本机 root 密码替换为 donor 的 root 密码，${CEND}"
+    echo "  ${CWARNING}      若 options.conf 的 dbrootpwd 与 donor 不一致，脚本将无法连接。${CEND}"
     return 1
   fi
 
