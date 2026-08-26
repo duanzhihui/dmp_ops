@@ -322,7 +322,6 @@ MGR_Clone() {
   echo "${CMSG}Cloning from donor '${mgr_recovery_user}'@'${donor_host}:${donor_port}'...${CEND}"
   echo "  donor:      ${donor_host}:${donor_port}"
   echo "  recovery:   ${mgr_recovery_user}"
-  echo "  password:   ${mgr_recovery_pwd:+<set>}${mgr_recovery_pwd:-<EMPTY!>}"
 
   # 密码为空则报错（clone 需要密码）
   if [ -z "${mgr_recovery_pwd}" ]; then
@@ -332,11 +331,9 @@ MGR_Clone() {
   fi
 
   local err
-  # 分两步执行: 先设 donor list，再 clone（避免 -e 多语句引号嵌套问题）
   MGR_Mysql -e "SET GLOBAL clone_valid_donor_list = '${donor_host}:${donor_port}';" 2>/dev/null
-  # 直接用 mysql 命令执行 CLONE（不经过 MGR_Mysql 封装，避免 "$@" 对单引号的二次解析）
-  err=$(${db_install_dir}/bin/mysql -uroot -p${dbrootpwd} --socket=/tmp/mysql.sock \
-    -e "CLONE INSTANCE FROM '${mgr_recovery_user}'@'${donor_host}:${donor_port}' IDENTIFIED BY '${mgr_recovery_pwd}';" 2>&1)
+  # 注意 CLONE 语法: 'user'@'host':port，host 在引号内、port 在引号外（不可写成 'host:port'）
+  err=$(MGR_Mysql -e "CLONE INSTANCE FROM '${mgr_recovery_user}'@'${donor_host}':${donor_port} IDENTIFIED BY '${mgr_recovery_pwd}';" 2>&1)
 
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}Clone initiated successfully${CEND}"
