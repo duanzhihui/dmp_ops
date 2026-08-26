@@ -14,6 +14,7 @@
 #   ./mgr_setup.sh --check                  前置条件检查（不执行任何变更）
 #   ./mgr_setup.sh --install-plugin         仅安装 group_replication 插件
 #   ./mgr_setup.sh --reset-gtid             重置本地 GTID/binlog（分叉节点恢复用）
+#   ./mgr_setup.sh --clone [donor]          从 donor 全量克隆（join 前数据同步）
 #   ./mgr_setup.sh -h, --help               显示帮助
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
@@ -56,6 +57,7 @@ Show_Help() {
   echo "  --check                   Check prerequisites (no changes)"
   echo "  --install-plugin          Install group_replication plugin only"
   echo "  --reset-gtid              Reset local GTID/binlog (recover diverged node)"
+  echo "  --clone [donor]           Clone from donor (full data sync before join)"
   echo "  -q, --quiet               Quiet mode"
   echo ""
   echo "Examples:"
@@ -66,12 +68,13 @@ Show_Help() {
 }
 
 # 解析命令行参数
-TEMP=$(getopt -o hq --long help,quiet,bootstrap,join,remove,status,set-primary:,check,install-plugin,reset-gtid -- "$@" 2>/dev/null)
+TEMP=$(getopt -o hq --long help,quiet,bootstrap,join,remove,status,set-primary:,check,install-plugin,reset-gtid,clone -- "$@" 2>/dev/null)
 [ $? != 0 ] && { echo "${CWARNING}ERROR: Invalid arguments!${CEND}"; Show_Help; exit 1; }
 eval set -- "${TEMP}"
 
 action=""
 set_primary_target=""
+clone_donor=""
 quiet_flag=n
 while :; do
   [ -z "$1" ] && break
@@ -105,6 +108,13 @@ while :; do
       ;;
     --reset-gtid)
       action="reset-gtid"; shift 1
+      ;;
+    --clone)
+      action="clone"; shift 1
+      # 可选 donor 参数: 若下一个参数不以 - 开头则视为 donor 地址
+      if [ -n "$1" ] && [[ "$1" != -* ]]; then
+        clone_donor="$1"; shift 1
+      fi
       ;;
     --)
       shift; break
@@ -141,10 +151,11 @@ if [ -z "${action}" ]; then
   echo "  ${CMSG}5${CEND}. Check prerequisites"
   echo "  ${CMSG}6${CEND}. Install group_replication plugin"
   echo "  ${CMSG}7${CEND}. Reset local GTID/binlog (recover diverged node)"
+  echo "  ${CMSG}8${CEND}. Clone from donor (full data sync before join)"
   echo "  ${CMSG}q${CEND}. Quit"
   echo ""
 
-  read -e -p "Enter your choice [1-7]: " choice
+  read -e -p "Enter your choice [1-8]: " choice
   case "${choice}" in
     1) action="bootstrap" ;;
     2) action="join" ;;
@@ -153,6 +164,7 @@ if [ -z "${action}" ]; then
     5) action="check" ;;
     6) action="install-plugin" ;;
     7) action="reset-gtid" ;;
+    8) action="clone" ;;
     q|Q) exit 0 ;;
     *) echo "Invalid choice"; exit 1 ;;
   esac
@@ -183,6 +195,9 @@ case "${action}" in
     ;;
   reset-gtid)
     MGR_Reset_Gtid
+    ;;
+  clone)
+    MGR_Clone "${clone_donor}"
     ;;
 esac
 

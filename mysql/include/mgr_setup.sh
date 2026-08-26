@@ -279,12 +279,89 @@ MGR_Reset_Gtid() {
 
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}GTID and binary logs reset successfully${CEND}"
-    echo "  ${CMSG}下一步: 运行 ./mgr_setup.sh --join 重新加入 group（会触发 clone 全量同步）${CEND}"
+    echo "  ${CWARNING}注意: reset-gtid 只清空 GTID 和 binlog，不清空数据表。${CEND}"
+    echo "  ${CWARNING}      若本地已有数据，join 时 MGR 会选增量恢复导致 1032 错误。${CEND}"
+    echo "  ${CMSG}下一步: 先运行 ./mgr_setup.sh --clone 从 donor 全量克隆，再 ./mgr_setup.sh --join${CEND}"
     return 0
   fi
   echo "${CFAILURE}Failed to reset GTID${CEND}"
   echo "  ${CWARNING}${err}${CEND}"
   echo "  确保 group_replication 已停止、无复制通道运行"
+  return 1
+}
+
+# 从 donor 全量克隆（用于 join 前的数据同步）
+# 参数 $1: donor 地址，格式 host:port，默认取 mgr_group_seeds 第一个节点
+MGR_Clone() {
+  local donor=${1:-$(echo "${mgr_group_seeds}" | cut -d',' -f1)}
+  # donor 格式是 ip:33061（group 通信端口），clone 需要 ip:3306（MySQL 数据端口）
+  local donor_host=$(echo "${donor}" | cut -d':' -f1)
+  local donor_port=3306
+
+  # 若仍在 group 中则先退出
+  local cur_state=$(MGR_Mysql -N -e \
+    "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_HOST=@@hostname;" 2>/dev/null)
+  if [ -n "${cur_state}" ]; then
+    echo "${CMSG}Stopping group_replication before clone...${CEND}"
+    MGR_Mysql -e "STOP GROUP_REPLICATION;" 2>/dev/null
+    sleep 2
+  fi
+
+  # 确保可写: clone 要求 super_read_only=OFF
+  MGR_Mysql -e "SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF;" 2>/dev/null
+
+  # 检查 clone plugin
+  local clone_installed=$(MGR_Mysql -N -e \
+    "SELECT COUNT(*) FROM information_schema.plugins WHERE plugin_name='clone';" 2>/dev/null)
+  if [ "${clone_installed}" != "1" ]; then
+    echo "${CFAILURE}[FAIL] clone plugin not installed${CEND}"
+    echo "  修复: INSTALL PLUGIN clone SONAME 'mysql_clone.so';"
+    return 1
+  fi
+
+  echo "${CMSG}Cloning from donor '${mgr_recovery_user}'@'${donor_host}:${donor_port}'...${CEND}"
+  echo "  donor:      ${donor_host}:${donor_port}"
+  echo "  recovery:   ${mgr_recovery_user}"
+
+  local err
+  err=$(MGR_Mysql -e \
+    "SET GLOBAL clone_valid_donor_list = '${donor_host}:${donor_port}'; \
+     CLONE INSTANCE FROM '${mgr_recovery_user}'@'${donor_host}:${donor_port}' IDENTIFIED BY '${mgr_recovery_pwd}';" 2>&1)
+
+  if [ $? -eq 0 ]; then
+    echo "${CSUCCESS}Clone initiated successfully${CEND}"
+    echo "  ${CMSG}mysqld 将自动重启，等待恢复...${CEND}"
+
+    # 等待 mysqld 重启完成（clone 会导致 mysqld 自动重启）
+    local i=0
+    sleep 3
+    while [ ${i} -lt 120 ]; do
+      if MGR_Mysql -e "SELECT 1;" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+      i=$((i + 1))
+    done
+
+    if [ ${i} -lt 120 ]; then
+      echo "${CSUCCESS}mysqld restarted after clone${CEND}"
+      local gtid=$(MGR_Mysql -N -e "SELECT @@global.gtid_executed;" 2>/dev/null)
+      echo "  ${CMSG}gtid_executed: ${gtid:-<empty>}${CEND}"
+      echo "  ${CMSG}下一步: 运行 ./mgr_setup.sh --join 加入 group${CEND}"
+      return 0
+    fi
+    echo "${CFAILURE}mysqld did not come back within 120s after clone${CEND}"
+    echo "  检查: service mysqld status 或 /data/mysql/mysql-error.log"
+    return 1
+  fi
+
+  echo "${CFAILURE}Clone failed${CEND}"
+  echo "  ${CWARNING}${err}${CEND}"
+  echo "  排查:"
+  echo "    1. donor 端 mgr_repl 是否有 BACKUP_ADMIN 权限"
+  echo "    2. donor 端 clone plugin 是否已安装"
+  echo "    3. 网络是否互通（${donor_host}:${donor_port}）"
+  echo "    4. super_read_only 是否已关闭"
   return 1
 }
 
@@ -303,7 +380,8 @@ MGR_Remove() {
 
   cur_state=$(MGR_Mysql -N -e \
     "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_HOST=@@hostname;" 2>/dev/null)
-  if [ -z "${cur_state}" ]; then
+  if [ -z "${cur_state}" ] || [ "${cur_state}" == "OFFLINE" ]; then
+    # OFFLINE 也视为已退出: STOP GROUP_REPLICATION 后本地视图可能残留 OFFLINE
     echo "${CSUCCESS}This node has left the MGR group${CEND}"
     echo "${CMSG}提示: 请从其他节点的 options.conf 的 mgr_group_seeds 中移除本节点地址${CEND}"
     return 0
