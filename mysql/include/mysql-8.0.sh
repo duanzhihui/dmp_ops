@@ -330,6 +330,9 @@ EOF
     cat >> /etc/my.cnf << EOF
 
 # === MGR (Group Replication, single-primary) ===
+# 注意: group_replication_* 由 group_replication 插件提供，--initialize 阶段插件
+#       尚未加载，直接写会被识别为 unknown variable 导致初始化失败。统一加 loose-
+#       前缀：插件未加载时 server 忽略这些变量，插件加载后正常生效（MySQL 官方推荐）。
 gtid_mode = ON
 enforce_gtid_consistency = ON
 log_slave_updates = 1
@@ -341,13 +344,13 @@ plugin_dir = ${mysql_install_dir}/lib/plugin
 transaction_write_set_extraction = XXHASH64
 master_info_repository = TABLE
 relay_log_info_repository = TABLE
-group_replication_group_name = ${mgr_group_name}
-group_replication_local_address = ${mgr_local_address}
-group_replication_group_seeds = ${mgr_group_seeds}
-group_replication_bootstrap_group = OFF
-group_replication_start_on_boot = OFF
-group_replication_single_primary_mode = ON
-group_replication_ssl_mode = ${mgr_ssl_mode}
+loose-group_replication_group_name = ${mgr_group_name}
+loose-group_replication_local_address = ${mgr_local_address}
+loose-group_replication_group_seeds = ${mgr_group_seeds}
+loose-group_replication_bootstrap_group = OFF
+loose-group_replication_start_on_boot = OFF
+loose-group_replication_single_primary_mode = ON
+loose-group_replication_ssl_mode = ${mgr_ssl_mode}
 EOF
   fi
 
