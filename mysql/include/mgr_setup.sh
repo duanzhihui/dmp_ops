@@ -115,6 +115,9 @@ MGR_Create_Recovery_User() {
 
   echo "${CMSG}Creating/resetting recovery user '${mgr_recovery_user}'...${CEND}"
 
+  # 确保可写: 上次 join 失败/异常退出可能残留 super_read_only=ON
+  MGR_Mysql -e "SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF;" 2>/dev/null
+
   local sql_prefix="" sql_suffix=""
   if [ "${binlog}" == "0" ]; then
     # join 场景: 不写 binlog，避免生成本地 GTID 导致与 group 分叉
@@ -124,19 +127,22 @@ MGR_Create_Recovery_User() {
     echo "  ${CMSG}(join mode: sql_log_bin=0, 不生成本地 GTID)${CEND}"
   fi
 
-  MGR_Mysql -e \
+  local err
+  err=$(MGR_Mysql -e \
     "${sql_prefix} \
      CREATE USER IF NOT EXISTS '${mgr_recovery_user}'@'%' IDENTIFIED BY '${mgr_recovery_pwd}'; \
      ALTER USER '${mgr_recovery_user}'@'%' IDENTIFIED BY '${mgr_recovery_pwd}'; \
      GRANT REPLICATION SLAVE ON *.* TO '${mgr_recovery_user}'@'%'; \
      FLUSH PRIVILEGES; \
-     ${sql_suffix}" 2>/dev/null
+     ${sql_suffix}" 2>&1)
 
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}Recovery user '${mgr_recovery_user}' ready${CEND}"
     return 0
   fi
   echo "${CFAILURE}Failed to create recovery user${CEND}"
+  echo "  ${CWARNING}${err}${CEND}"
+  echo "  排查: SELECT @@global.super_read_only, @@global.read_only; 若为 1 需 SET GLOBAL super_read_only=OFF"
   return 1
 }
 
@@ -258,13 +264,17 @@ MGR_Reset_Gtid() {
   echo "${CMSG}Current gtid_executed: ${gtid_executed:-<empty>}${CEND}"
   echo "${CMSG}Local server_uuid:    ${server_uuid}${CEND}"
 
+  # 确保可写: 上次 join 失败/异常退出可能残留 super_read_only=ON
+  MGR_Mysql -e "SET GLOBAL super_read_only=OFF; SET GLOBAL read_only=OFF;" 2>/dev/null
+
   # 版本适配: 8.4 用 RESET BINARY LOGS AND GTIDS，8.0 用 RESET MASTER
   local ver=$(MGR_Version_Adapt)
   echo "${CMSG}Resetting binary logs and GTID executed set (MySQL ${ver})...${CEND}"
+  local err
   if [ "${ver}" == "8.4" ] || [ "${ver}" == "8.3" ] || [ "${ver}" == "8.2" ]; then
-    MGR_Mysql -e "RESET BINARY LOGS AND GTIDS;"
+    err=$(MGR_Mysql -e "RESET BINARY LOGS AND GTIDS;" 2>&1)
   else
-    MGR_Mysql -e "RESET MASTER;"
+    err=$(MGR_Mysql -e "RESET MASTER;" 2>&1)
   fi
 
   if [ $? -eq 0 ]; then
@@ -273,6 +283,7 @@ MGR_Reset_Gtid() {
     return 0
   fi
   echo "${CFAILURE}Failed to reset GTID${CEND}"
+  echo "  ${CWARNING}${err}${CEND}"
   echo "  确保 group_replication 已停止、无复制通道运行"
   return 1
 }
