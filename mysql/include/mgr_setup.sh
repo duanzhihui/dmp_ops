@@ -101,7 +101,11 @@ MGR_Install_Plugin() {
 }
 
 # 创建/重置复制用户（用于 group_replication_recovery 通道）
+# 参数 $1: binlog 控制标志，1=写 binlog（bootstrap 场景，用户需复制给 joiner）
+#         0=不写 binlog（join 场景，避免生成本地 GTID 导致分叉）
 MGR_Create_Recovery_User() {
+  local binlog=${1:-1}
+
   # 密码留空时自动生成并回写 options.conf
   if [ -z "${mgr_recovery_pwd}" ]; then
     mgr_recovery_pwd=$(< /dev/urandom tr -dc A-Za-z0-9 | head -c16)
@@ -110,12 +114,23 @@ MGR_Create_Recovery_User() {
   fi
 
   echo "${CMSG}Creating/resetting recovery user '${mgr_recovery_user}'...${CEND}"
+
+  local sql_prefix="" sql_suffix=""
+  if [ "${binlog}" == "0" ]; then
+    # join 场景: 不写 binlog，避免生成本地 GTID 导致与 group 分叉
+    # （recovery 用户已由 clone 从 donor 复制过来，本地创建仅为兜底）
+    sql_prefix="SET sql_log_bin=0;"
+    sql_suffix="SET sql_log_bin=1;"
+    echo "  ${CMSG}(join mode: sql_log_bin=0, 不生成本地 GTID)${CEND}"
+  fi
+
   MGR_Mysql -e \
-    "CREATE USER IF NOT EXISTS '${mgr_recovery_user}'@'%' IDENTIFIED BY '${mgr_recovery_pwd}';" 2>/dev/null
-  MGR_Mysql -e \
-    "ALTER USER '${mgr_recovery_user}'@'%' IDENTIFIED BY '${mgr_recovery_pwd}';" 2>/dev/null
-  MGR_Mysql -e \
-    "GRANT REPLICATION SLAVE ON *.* TO '${mgr_recovery_user}'@'%'; FLUSH PRIVILEGES;"
+    "${sql_prefix} \
+     CREATE USER IF NOT EXISTS '${mgr_recovery_user}'@'%' IDENTIFIED BY '${mgr_recovery_pwd}'; \
+     ALTER USER '${mgr_recovery_user}'@'%' IDENTIFIED BY '${mgr_recovery_pwd}'; \
+     GRANT REPLICATION SLAVE ON *.* TO '${mgr_recovery_user}'@'%'; \
+     FLUSH PRIVILEGES; \
+     ${sql_suffix}" 2>/dev/null
 
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}Recovery user '${mgr_recovery_user}' ready${CEND}"
@@ -129,7 +144,7 @@ MGR_Create_Recovery_User() {
 MGR_Bootstrap() {
   MGR_Check_Prerequisites || return 1
   MGR_Install_Plugin || return 1
-  MGR_Create_Recovery_User || return 1
+  MGR_Create_Recovery_User 1 || return 1
 
   # 检查是否已在 group 中
   local cur_state=$(MGR_Mysql -N -e \
@@ -176,7 +191,7 @@ MGR_Bootstrap() {
 MGR_Join() {
   MGR_Check_Prerequisites || return 1
   MGR_Install_Plugin || return 1
-  MGR_Create_Recovery_User || return 1
+  MGR_Create_Recovery_User 0 || return 1
 
   # 检查是否已在 group 中
   local cur_state=$(MGR_Mysql -N -e \
@@ -220,6 +235,45 @@ MGR_Join() {
   fi
   echo "${CFAILURE}Failed to join MGR group! Node state: ${state:-unknown}${CEND}"
   echo "  Check error log: ${db_data_dir}/mysql-error.log"
+  return 1
+}
+
+# 重置本地 GTID 与 binlog（用于分叉节点恢复）
+# 场景: 节点因本地存在 group 不认识的 GTID（如 recovery 用户创建产生的本地事务）
+#       导致 join 失败，报错 MY-011526 / MY-011522。
+# 本函数清空 gtid_executed 和 binlog，随后 --join 会触发 clone 重新全量同步。
+MGR_Reset_Gtid() {
+  # 若仍在 group 中则先退出
+  local cur_state=$(MGR_Mysql -N -e \
+    "SELECT MEMBER_STATE FROM performance_schema.replication_group_members WHERE MEMBER_HOST=@@hostname;" 2>/dev/null)
+  if [ -n "${cur_state}" ]; then
+    echo "${CMSG}Stopping group_replication before reset...${CEND}"
+    MGR_Mysql -e "STOP GROUP_REPLICATION;" 2>/dev/null
+    sleep 2
+  fi
+
+  # 展示当前 GTID 状态（便于确认）
+  local gtid_executed=$(MGR_Mysql -N -e "SELECT @@global.gtid_executed;" 2>/dev/null)
+  local server_uuid=$(MGR_Mysql -N -e "SELECT @@global.server_uuid;" 2>/dev/null)
+  echo "${CMSG}Current gtid_executed: ${gtid_executed:-<empty>}${CEND}"
+  echo "${CMSG}Local server_uuid:    ${server_uuid}${CEND}"
+
+  # 版本适配: 8.4 用 RESET BINARY LOGS AND GTIDS，8.0 用 RESET MASTER
+  local ver=$(MGR_Version_Adapt)
+  echo "${CMSG}Resetting binary logs and GTID executed set (MySQL ${ver})...${CEND}"
+  if [ "${ver}" == "8.4" ] || [ "${ver}" == "8.3" ] || [ "${ver}" == "8.2" ]; then
+    MGR_Mysql -e "RESET BINARY LOGS AND GTIDS;"
+  else
+    MGR_Mysql -e "RESET MASTER;"
+  fi
+
+  if [ $? -eq 0 ]; then
+    echo "${CSUCCESS}GTID and binary logs reset successfully${CEND}"
+    echo "  ${CMSG}下一步: 运行 ./mgr_setup.sh --join 重新加入 group（会触发 clone 全量同步）${CEND}"
+    return 0
+  fi
+  echo "${CFAILURE}Failed to reset GTID${CEND}"
+  echo "  确保 group_replication 已停止、无复制通道运行"
   return 1
 }
 

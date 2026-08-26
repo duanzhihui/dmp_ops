@@ -13,6 +13,7 @@
 #   ./mgr_setup.sh --set-primary <id>       强制切换主
 #   ./mgr_setup.sh --check                  前置条件检查（不执行任何变更）
 #   ./mgr_setup.sh --install-plugin         仅安装 group_replication 插件
+#   ./mgr_setup.sh --reset-gtid             重置本地 GTID/binlog（分叉节点恢复用）
 #   ./mgr_setup.sh -h, --help               显示帮助
 
 export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin
@@ -54,6 +55,7 @@ Show_Help() {
   echo "  --set-primary <id>        Force switch primary to <member_id>"
   echo "  --check                   Check prerequisites (no changes)"
   echo "  --install-plugin          Install group_replication plugin only"
+  echo "  --reset-gtid              Reset local GTID/binlog (recover diverged node)"
   echo "  -q, --quiet               Quiet mode"
   echo ""
   echo "Examples:"
@@ -64,7 +66,7 @@ Show_Help() {
 }
 
 # 解析命令行参数
-TEMP=$(getopt -o hq --long help,quiet,bootstrap,join,remove,status,set-primary:,check,install-plugin -- "$@" 2>/dev/null)
+TEMP=$(getopt -o hq --long help,quiet,bootstrap,join,remove,status,set-primary:,check,install-plugin,reset-gtid -- "$@" 2>/dev/null)
 [ $? != 0 ] && { echo "${CWARNING}ERROR: Invalid arguments!${CEND}"; Show_Help; exit 1; }
 eval set -- "${TEMP}"
 
@@ -101,6 +103,9 @@ while :; do
     --install-plugin)
       action="install-plugin"; shift 1
       ;;
+    --reset-gtid)
+      action="reset-gtid"; shift 1
+      ;;
     --)
       shift; break
       ;;
@@ -135,10 +140,11 @@ if [ -z "${action}" ]; then
   echo "  ${CMSG}4${CEND}. Show group status"
   echo "  ${CMSG}5${CEND}. Check prerequisites"
   echo "  ${CMSG}6${CEND}. Install group_replication plugin"
+  echo "  ${CMSG}7${CEND}. Reset local GTID/binlog (recover diverged node)"
   echo "  ${CMSG}q${CEND}. Quit"
   echo ""
 
-  read -e -p "Enter your choice [1-6]: " choice
+  read -e -p "Enter your choice [1-7]: " choice
   case "${choice}" in
     1) action="bootstrap" ;;
     2) action="join" ;;
@@ -146,6 +152,7 @@ if [ -z "${action}" ]; then
     4) action="status" ;;
     5) action="check" ;;
     6) action="install-plugin" ;;
+    7) action="reset-gtid" ;;
     q|Q) exit 0 ;;
     *) echo "Invalid choice"; exit 1 ;;
   esac
@@ -173,6 +180,9 @@ case "${action}" in
     ;;
   install-plugin)
     MGR_Install_Plugin
+    ;;
+  reset-gtid)
+    MGR_Reset_Gtid
     ;;
 esac
 
