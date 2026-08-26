@@ -324,9 +324,9 @@ MGR_Clone() {
   echo "  recovery:   ${mgr_recovery_user}"
 
   local err
-  err=$(MGR_Mysql -e \
-    "SET GLOBAL clone_valid_donor_list = '${donor_host}:${donor_port}'; \
-     CLONE INSTANCE FROM '${mgr_recovery_user}'@'${donor_host}:${donor_port}' IDENTIFIED BY '${mgr_recovery_pwd}';" 2>&1)
+  # 分两步执行: 先设 donor list，再 clone（避免 -e 多语句引号嵌套问题）
+  MGR_Mysql -e "SET GLOBAL clone_valid_donor_list = '${donor_host}:${donor_port}';" 2>/dev/null
+  err=$(MGR_Mysql -e "CLONE INSTANCE FROM '${mgr_recovery_user}'@'${donor_host}:${donor_port}' IDENTIFIED BY '${mgr_recovery_pwd}';" 2>&1)
 
   if [ $? -eq 0 ]; then
     echo "${CSUCCESS}Clone initiated successfully${CEND}"
