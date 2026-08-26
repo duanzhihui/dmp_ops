@@ -24,6 +24,12 @@ Show_Help() {
   --check                     Run health check
   --loop [interval]           Continuous monitoring (default: 60s)
   --recovery                  Enable auto-recovery on failure
+  --start                     Start all DolphinScheduler services
+                              (role order: master -> worker -> api -> alert;
+                              a role is only started after every node of the
+                              previous role is active)
+  --stop                      Stop all DolphinScheduler services
+                              (reverse order: alert -> api -> worker -> master)
 
   In cluster mode, run this script on the control node (the one configured
   with 'ips' in options.conf). It will SSH into every node and report the
@@ -32,7 +38,7 @@ Show_Help() {
 }
 
 ARG_NUM=$#
-TEMP=$(getopt -o h --long help,status,check,loop:,recovery -- "$@" 2>/dev/null)
+TEMP=$(getopt -o h --long help,status,check,loop:,recovery,start,stop -- "$@" 2>/dev/null)
 [ $? != 0 ] && echo "${CWARNING}ERROR: unknown argument! ${CEND}" && Show_Help && exit 1
 eval set -- "${TEMP}"
 
@@ -41,6 +47,8 @@ check_flag=n
 loop_flag=n
 loop_interval=60
 recovery_flag=n
+start_flag=n
+stop_flag=n
 
 while :; do
   [ -z "$1" ] && break;
@@ -59,6 +67,12 @@ while :; do
       ;;
     --recovery)
       recovery_flag=y; shift 1
+      ;;
+    --start)
+      start_flag=y; shift 1
+      ;;
+    --stop)
+      stop_flag=y; shift 1
       ;;
     --)
       shift
@@ -131,6 +145,233 @@ Show_Status() {
   echo ""
 }
 
+# Return the comma separated list of nodes (from ${ips}) that carry ${1} role.
+# Workers entries may use the "ip:group" form; only the ip part is compared.
+Nodes_With_Role() {
+  local role=$1
+  local ips_array=(${ips//,/ })
+  local ip result=""
+  for ip in "${ips_array[@]}"; do
+    local roles=$(Get_Node_Roles "${ip}")
+    local r
+    for r in ${roles//,/ }; do
+      [ "${r}" == "${role}" ] && result="${result} ${ip}" && break
+    done
+  done
+  echo "${result# }"
+}
+
+# Check that every node listed in ${1} (space separated) has the ${2} role
+# service active. Returns 0 only if all are active.
+Role_All_Active() {
+  local role=$1; shift
+  local ip status
+  for ip in "$@"; do
+    if Is_Local_Node "${ip}"; then
+      status=$(systemctl is-active dolphinscheduler-${role} 2>/dev/null)
+    else
+      Build_SSH_Opts
+      status=$(ssh -o BatchMode=yes ${ssh_opts} "$(Remote_Target ${ip})" \
+        "systemctl is-active dolphinscheduler-${role}" 2>/dev/null)
+    fi
+    [ "${status}" != "active" ] && return 1
+  done
+  return 0
+}
+
+# Start a single role on every node that owns it.
+# ${1} = role, ${2}.. = nodes (space separated)
+Start_Role_On_Nodes() {
+  local role=$1; shift
+  local nodes="$@"
+  [ -z "${nodes}" ] && return 0
+
+  local ip has_error=0
+  for ip in ${nodes}; do
+    echo "${CMSG}  starting ${role}-server on ${ip}...${CEND}"
+    Systemctl_On_Node "${ip}" "${role}" start || has_error=1
+  done
+
+  # Give systemd a moment to settle before we probe is-active
+  sleep 5
+
+  if Role_All_Active "${role}" ${nodes}; then
+    echo "${CSUCCESS}  ${role}-server active on all nodes (${nodes})${CEND}"
+    return 0
+  fi
+
+  # Report which node failed
+  for ip in ${nodes}; do
+    if Is_Local_Node "${ip}"; then
+      status=$(systemctl is-active dolphinscheduler-${role} 2>/dev/null)
+    else
+      Build_SSH_Opts
+      status=$(ssh -o BatchMode=yes ${ssh_opts} "$(Remote_Target ${ip})" \
+        "systemctl is-active dolphinscheduler-${role}" 2>/dev/null)
+    fi
+    if [ "${status}" != "active" ]; then
+      echo "${CFAILURE}  ${role}-server on ${ip} is ${status:-inactive}${CEND}"
+      if Is_Local_Node "${ip}"; then
+        journalctl -u dolphinscheduler-${role} --no-pager -n 20 2>/dev/null
+      else
+        ssh -o BatchMode=yes ${ssh_opts} "$(Remote_Target ${ip})" \
+          "journalctl -u dolphinscheduler-${role} --no-pager -n 20 2>/dev/null"
+      fi
+    fi
+  done
+  return 1
+}
+
+# Stop a single role on every node that owns it.
+# ${1} = role, ${2}.. = nodes (space separated)
+Stop_Role_On_Nodes() {
+  local role=$1; shift
+  local nodes="$@"
+  [ -z "${nodes}" ] && return 0
+
+  local ip
+  for ip in ${nodes}; do
+    echo "${CMSG}  stopping ${role}-server on ${ip}...${CEND}"
+    Systemctl_On_Node "${ip}" "${role}" stop 2>/dev/null
+  done
+  return 0
+}
+
+# Start all DolphinScheduler services respecting role dependencies.
+# Order: master -> worker -> api -> alert.
+# A role is only started after every node of the previous role is active.
+Start_DS() {
+  echo ""
+  echo "${CMSG}========== Starting DolphinScheduler ==========${CEND}"
+  echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
+  echo ""
+
+  # --- Standalone mode: single unit ---
+  if [ "${deploy_mode}" == "standalone" ]; then
+    if [ ! -f "/lib/systemd/system/dolphinscheduler-standalone.service" ]; then
+      echo "${CFAILURE}Standalone service unit not found; is DolphinScheduler installed?${CEND}"
+      return 1
+    fi
+    systemctl start dolphinscheduler-standalone
+    sleep 5
+    if systemctl is-active --quiet dolphinscheduler-standalone; then
+      echo "${CSUCCESS}Standalone Server started${CEND}"
+      echo "  Web UI: http://localhost:${web_port}/dolphinscheduler/ui"
+      return 0
+    fi
+    echo "${CFAILURE}Failed to start Standalone Server${CEND}"
+    journalctl -u dolphinscheduler-standalone --no-pager -n 20
+    return 1
+  fi
+
+  # --- Pseudo-cluster / cluster: role-ordered start with dependency check ---
+  local masters_nodes  workers_nodes  api_nodes  alert_nodes
+  masters_nodes=$(Nodes_With_Role master)
+  workers_nodes=$(Nodes_With_Role worker)
+  api_nodes=$(Nodes_With_Role api)
+  alert_nodes=$(Nodes_With_Role alert)
+
+  if [ -z "${masters_nodes}" ]; then
+    echo "${CFAILURE}No master node found in options.conf; cannot start cluster${CEND}"
+    return 1
+  fi
+
+  echo "${CMSG}Nodes -> master:[${masters_nodes:-none}] worker:[${workers_nodes:-none}] api:[${api_nodes:-none}] alert:[${alert_nodes:-none}]${CEND}"
+  echo ""
+
+  # 1) Master
+  echo "${CMSG}[1/4] Starting master-server (master is required by all other roles)...${CEND}"
+  Start_Role_On_Nodes master ${masters_nodes} || {
+    echo "${CFAILURE}master-server did not become active on every node; aborting start to keep cluster consistent${CEND}"
+    return 1
+  }
+
+  # 2) Worker (depends on master being up)
+  echo ""
+  echo "${CMSG}[2/4] Starting worker-server (requires master)...${CEND}"
+  Start_Role_On_Nodes worker ${workers_nodes} || {
+    echo "${CWARNING}worker-server failed on some nodes; continuing with api/alert start${CEND}"
+  }
+
+  # 3) API (depends on master)
+  echo ""
+  echo "${CMSG}[3/4] Starting api-server (requires master)...${CEND}"
+  Start_Role_On_Nodes api ${api_nodes} || {
+    echo "${CWARNING}api-server failed on some nodes; continuing with alert start${CEND}"
+  }
+
+  # 4) Alert (independent, started last)
+  echo ""
+  echo "${CMSG}[4/4] Starting alert-server...${CEND}"
+  Start_Role_On_Nodes alert ${alert_nodes} || {
+    echo "${CWARNING}alert-server failed on some nodes${CEND}"
+  }
+
+  echo ""
+  echo "${CMSG}---------- start summary ----------${CEND}"
+  local ok=1
+  Role_All_Active master  ${masters_nodes}  || { echo "${CFAILURE}master:  NOT all active${CEND}";  ok=0; }
+  [ -n "${workers_nodes}" ] && { Role_All_Active worker ${workers_nodes} || { echo "${CFAILURE}worker:  NOT all active${CEND}"; ok=0; } }
+  [ -n "${api_nodes}" ]     && { Role_All_Active api     ${api_nodes}     || { echo "${CFAILURE}api:     NOT all active${CEND}"; ok=0; } }
+  [ -n "${alert_nodes}" ]   && { Role_All_Active alert   ${alert_nodes}   || { echo "${CFAILURE}alert:   NOT all active${CEND}"; ok=0; } }
+  if [ ${ok} -eq 1 ]; then
+    echo "${CSUCCESS}DolphinScheduler cluster started${CEND}"
+  else
+    echo "${CFAILURE}Some services failed to start; see details above${CEND}"
+  fi
+  return $((1 - ok))
+}
+
+# Stop all DolphinScheduler services in reverse dependency order.
+# Order: alert -> api -> worker -> master.
+Stop_DS() {
+  echo ""
+  echo "${CMSG}========== Stopping DolphinScheduler ==========${CEND}"
+  echo "Time: $(date '+%Y-%m-%d %H:%M:%S')"
+  echo ""
+
+  # --- Standalone mode ---
+  if [ "${deploy_mode}" == "standalone" ]; then
+    systemctl stop dolphinscheduler-standalone 2>/dev/null
+    sleep 2
+    if systemctl is-active --quiet dolphinscheduler-standalone; then
+      echo "${CFAILURE}Failed to stop Standalone Server${CEND}"
+      return 1
+    fi
+    echo "${CSUCCESS}Standalone Server stopped${CEND}"
+    return 0
+  fi
+
+  # --- Pseudo-cluster / cluster: reverse role order ---
+  local alert_nodes  api_nodes  workers_nodes  masters_nodes
+  alert_nodes=$(Nodes_With_Role alert)
+  api_nodes=$(Nodes_With_Role api)
+  workers_nodes=$(Nodes_With_Role worker)
+  masters_nodes=$(Nodes_With_Role master)
+
+  echo "${CMSG}Stopping in reverse dependency order: alert -> api -> worker -> master${CEND}"
+  echo ""
+
+  echo "${CMSG}[1/4] Stopping alert-server...${CEND}"
+  Stop_Role_On_Nodes alert ${alert_nodes}
+
+  echo ""
+  echo "${CMSG}[2/4] Stopping api-server...${CEND}"
+  Stop_Role_On_Nodes api ${api_nodes}
+
+  echo ""
+  echo "${CMSG}[3/4] Stopping worker-server...${CEND}"
+  Stop_Role_On_Nodes worker ${workers_nodes}
+
+  echo ""
+  echo "${CMSG}[4/4] Stopping master-server...${CEND}"
+  Stop_Role_On_Nodes master ${masters_nodes}
+
+  echo ""
+  echo "${CSUCCESS}DolphinScheduler cluster stopped${CEND}"
+  return 0
+}
+
 # Run health check with optional auto-recovery
 Run_Health_Check() {
   local has_error=0
@@ -170,6 +411,16 @@ Main() {
       Show_Status
     fi
     exit 0
+  fi
+
+  if [ "${start_flag}" == "y" ]; then
+    Start_DS
+    exit $?
+  fi
+
+  if [ "${stop_flag}" == "y" ]; then
+    Stop_DS
+    exit $?
   fi
 
   if [ "${loop_flag}" == "y" ]; then

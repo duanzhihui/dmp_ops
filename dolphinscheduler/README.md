@@ -190,6 +190,31 @@ systemctl {start|stop|restart|status} dolphinscheduler-alert
 
 ## 常用命令
 
+### 启动 / 停止整个集群
+
+`monitor.sh` 提供一键启停，按部署模式自动分发：
+
+```bash
+# 启动整个集群（standalone / pseudo-cluster / cluster 通用）
+./monitor.sh --start
+
+# 停止整个集群
+./monitor.sh --stop
+```
+
+**启动顺序与依赖校验**：cluster / pseudo-cluster 模式下按角色顺序启动，
+且后一角色只有在前一角色的**所有节点**都 `active` 之后才会启动：
+
+1. `master` —— 必须全部 active，否则中止启动（master 是其他角色的依赖）
+2. `worker` —— 依赖 master
+3. `api` —— 依赖 master
+4. `alert` —— 独立，最后启动
+
+**停止顺序**为反向：`alert → api → worker → master`。
+
+cluster 模式下只需在控制节点（`options.conf` 中配置了 `ips` 的节点）执行，
+脚本会经 SSH 遍历所有节点按角色启停；各节点无需单独操作。
+
 ### 查看状态
 
 ```bash
