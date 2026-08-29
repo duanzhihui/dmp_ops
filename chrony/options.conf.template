@@ -24,7 +24,7 @@ deploy_mode=standalone
 timezone=Asia/Shanghai
 
 # ===== 上游 NTP 源（server 角色 / 单机 client 使用，逗号分隔）=====
-upstream_ntp_servers=ntp.aliyun.com,ntp1.aliyun.com,cn.pool.ntp.org,ntp.tuna.tsinghua.edu.cn
+upstream_ntp_servers=ntp.tencent.com,ntp.aliyun.com,cn.pool.ntp.org
 
 # ===== 内网 NTP Server 地址（cluster 模式下 client 指向它，逗号分隔）=====
 ntp_server_hosts=
