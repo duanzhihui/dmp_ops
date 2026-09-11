@@ -86,6 +86,137 @@ Check_DolphinScheduler_ZK() {
   return 1
 }
 
+#########################################################################
+# Registry (ZooKeeper) inspection
+#
+# A service can be 'active' in systemd, listening on its port and still be
+# useless: if it did not register, registered an unreachable address, joined
+# the wrong worker group or reports itself as BUSY (overload protection), the
+# master will never dispatch a task to it and the task instance keeps an
+# empty 'host'. The process/port checks above cannot see any of that, so the
+# registry is inspected directly.
+#########################################################################
+
+# Locate zkCli.sh (options.conf: zk_cli, then PATH, then the usual prefixes)
+_Find_Zk_Cli() {
+  if [ -n "${zk_cli}" ] && [ -x "${zk_cli}" ]; then
+    echo "${zk_cli}"
+    return 0
+  fi
+
+  local candidate
+  candidate=$(command -v zkCli.sh 2>/dev/null)
+  if [ -n "${candidate}" ]; then
+    echo "${candidate}"
+    return 0
+  fi
+
+  for candidate in "${ZOOKEEPER_HOME}/bin/zkCli.sh" \
+                   /opt/zookeeper/bin/zkCli.sh \
+                   /usr/local/zookeeper/bin/zkCli.sh \
+                   /data/zookeeper/bin/zkCli.sh; do
+    [ -x "${candidate}" ] && { echo "${candidate}"; return 0; }
+  done
+
+  return 1
+}
+
+# List the children of a znode, space separated
+_Zk_Ls() {
+  ${_zkcli} -server "${zk_hosts}" ls "$1" 2>/dev/null \
+    | grep -oE '^\[.*\]$' | tail -1 | tr -d '[]' | tr ',' ' '
+}
+
+# Read the data of a znode
+_Zk_Get() {
+  ${_zkcli} -server "${zk_hosts}" get "$1" 2>/dev/null
+}
+
+# Report one registered server node. $1 = label, $2 = znode data
+_Report_Registry_Node() {
+  local label=$1
+  local data=$2
+  local status
+
+  status=$(echo "${data}" | grep -oE '"serverStatus"[[:space:]]*:[[:space:]]*"[A-Z]+"' | head -1 | grep -oE '[A-Z]+"$' | tr -d '"')
+
+  case "${status}" in
+    NORMAL)
+      echo "${CSUCCESS}[OK]${CEND}   worker ${label} registered (NORMAL)"
+      return 0
+      ;;
+    BUSY)
+      echo "${CFAILURE}[FAIL]${CEND} worker ${label} is BUSY - overload protection is rejecting dispatch"
+      echo "         raise server_load_protection_max_* or set server_load_protection_enabled=false"
+      return 1
+      ;;
+    *)
+      # Older layouts do not expose serverStatus; presence is all we can check
+      echo "${CSUCCESS}[OK]${CEND}   worker ${label} registered"
+      return 0
+      ;;
+  esac
+}
+
+# Verify that workers are registered, in the expected groups, and not BUSY.
+Check_Worker_Registry() {
+  local namespace=${registry_namespace:-dolphinscheduler}
+  local base="/${namespace}/nodes/worker"
+
+  echo "${CMSG}Checking worker registry (${zk_hosts}${base})...${CEND}"
+
+  _zkcli=$(_Find_Zk_Cli)
+  if [ -z "${_zkcli}" ]; then
+    echo "${CWARNING}[SKIP]${CEND} zkCli.sh not found; set zk_cli in options.conf to enable this check"
+    return 0
+  fi
+
+  local children
+  children=$(_Zk_Ls "${base}")
+
+  if [ -z "${children}" ]; then
+    echo "${CFAILURE}[FAIL]${CEND} no worker registered under ${base}"
+    echo "         tasks will stay in 'submit success' with an empty host"
+    return 1
+  fi
+
+  local has_error=0 registered_groups="" child data host
+  for child in ${children}; do
+    data=$(_Zk_Get "${base}/${child}")
+    if echo "${data}" | grep -q 'serverStatus\|"host"'; then
+      # 3.2.x layout: /nodes/worker/<host:port>
+      _Report_Registry_Node "${child}" "${data}" || has_error=1
+      registered_groups="${registered_groups} default"
+    else
+      # 3.3+ layout: /nodes/worker/<group>/<host:port>
+      registered_groups="${registered_groups} ${child}"
+      local hosts
+      hosts=$(_Zk_Ls "${base}/${child}")
+      if [ -z "${hosts}" ]; then
+        echo "${CWARNING}[WARN]${CEND} worker group '${child}' has no member"
+        continue
+      fi
+      for host in ${hosts}; do
+        _Report_Registry_Node "${child}/${host}" "$(_Zk_Get "${base}/${child}/${host}")" || has_error=1
+      done
+    fi
+  done
+
+  # Cross-check the groups from options.conf against what is registered
+  local entry group
+  for entry in ${workers//,/ }; do
+    group=${entry#*:}
+    [ "${group}" == "${entry}" ] && group="default"
+    if [[ " ${registered_groups} " != *" ${group} "* ]]; then
+      echo "${CFAILURE}[FAIL]${CEND} worker group '${group}' from options.conf is not registered"
+      echo "         a workflow bound to it can never be dispatched"
+      has_error=1
+    fi
+  done
+
+  return ${has_error}
+}
+
 # Check HTTP health
 Check_DolphinScheduler_HTTP() {
   local url=$1
@@ -177,6 +308,9 @@ Monitor_DolphinScheduler_Status() {
 
     # ZooKeeper
     Check_DolphinScheduler_ZK || has_error=1
+
+    # Worker registration / worker groups / overload status
+    Check_Worker_Registry || has_error=1
 
     # Database
     Check_DolphinScheduler_DB || has_error=1
@@ -491,6 +625,7 @@ Monitor_Cluster_Status() {
   # Shared components: check once from the control node.
   echo "${CMSG}--- Shared Components ---${CEND}"
   Check_DolphinScheduler_ZK || has_error=1
+  Check_Worker_Registry || has_error=1
   Check_DolphinScheduler_DB || has_error=1
 
   # Control node disk (remote node disks are checked per-node above).

@@ -139,7 +139,11 @@
 - 部署模式：deploy_mode (standalone/pseudo-cluster/cluster)
 - 数据库配置：db_type, db_host, db_port, db_name, db_user, db_password
 - ZooKeeper 配置：zk_hosts
-- 集群配置：ips, masters, workers, alert_server, api_servers, ssh_port, ssh_user, ssh_key_file
+- ZooKeeper 配置：zk_hosts, registry_namespace, zk_cli
+- 集群配置：ips, masters, workers（ip:分组）, alert_server, api_servers, ssh_port, ssh_user, ssh_key_file
+- 过载保护：server_load_protection_enabled, server_load_protection_max_cpu/jvm_cpu/memory/disk
+- 网络配置：network_interface_preferred, network_interface_restrict, network_priority_strategy
+- 工作目录：data_basedir_path
 - 资源存储配置：resource_storage_type, resource_local_path, hdfs_*, s3_*
 - JAVA_HOME 配置
 - 备份配置：backup_dir, expired_days, backup_destination, backup_content
@@ -233,18 +237,33 @@ zookeeper_ver=3.9.3
   1. 创建目录
   2. 解压安装包（已解压则跳过，但仍重新配置，保证幂等且可修复失败的安装）
   3. 安装 MySQL JDBC 驱动（如使用 MySQL）
-  4. 配置环境变量
-  5. 配置 install_env.sh
-  6. 配置 application.yaml
-  7. 初始化数据库（skip_db_init=y 时跳过，schema 只在首节点初始化一次）
-  8. 设置目录权限
-  9. 按 node_roles 安装 systemd 服务
+  4. 配置环境变量、application.yaml、common.properties、时区
+  5. 初始化数据库（skip_db_init=y 时跳过，schema 只在首节点初始化一次）
+     并在 3.2.x 上注册 worker 分组
+  6. 设置目录权限
+  7. 按 node_roles 安装 systemd 服务
   - 任一步骤失败即返回非 0，不再继续安装服务
+  - 注意：**不写** `bin/env/install_env.sh`，它只被 DolphinScheduler 自带的
+    install.sh 读取，本工具用自己生成的 systemd unit 启动服务
 
+- `Yaml_Set_Key()` — 在 YAML 指定块内设置/插入键（只作用于首个匹配块，
+  不影响多文档 profile 段），键缺失时追加到块尾
+- `Properties_Set()` — 在 .properties 中设置键（被注释掉的键会被复用），缺失则追加
+- `Version_Ge()` — 版本号比较
 - `Configure_Env_Standalone()` — 配置 Standalone 环境
 - `Configure_Env_PseudoCluster()` — 配置 Pseudo-Cluster 环境
-- `Configure_Install_Env()` — 配置 install_env.sh
-- `Configure_Application_Yaml()` — 配置各模块的 application.yaml
+- `Configure_Application_Yaml()` — 配置各模块的 application.yaml（端口、绑定地址、
+  worker 分组、过载保护、注册中心 namespace）
+- `Get_Local_Worker_Group()` — 由 workers=ip:分组 解析本节点所属 worker 分组
+- `Configure_Worker_Group()` — 3.3+ 写 application.yaml 的 `worker.group`；
+  3.2.x 交由 `Register_Worker_Groups_DB()` 处理
+- `Register_Worker_Groups_DB()` — 3.2.x 将分组与 `<ip>:<worker_rpc_port>` 写入
+  `t_ds_worker_group`（只在初始化 schema 的首节点执行）
+- `Configure_Load_Protection()` — 配置 master/worker 的 server-load-protection
+  开关与阈值（原生默认阈值偏低，会让节点上报 BUSY 而不被派发任务）
+- `Configure_Common_Properties()` — 配置各模块 common.properties：
+  data.basedir.path、资源存储（LOCAL/HDFS/S3）、注册地址所用网卡
+- `Configure_Timezone()` — 将各模块 `spring.jackson.time-zone` 对齐 options.conf
 - `Install_MySQL_JDBC()` — 安装 MySQL JDBC 驱动到各模块
 - `Init_Database()` — 初始化数据库
 - `Install_Standalone_Service()` — 安装 Standalone systemd 服务
@@ -283,7 +302,9 @@ zookeeper_ver=3.9.3
   4. 校验版本号（新旧不能相同）
   5. 下载新版本
   6. 升级前备份（配置文件 + 数据库）
-  7. 停服务 → 替换文件 → 执行数据库升级脚本 → 启服务
+  7. 停服务 → 替换文件 → 还原 application.yaml / common.properties →
+     按目标版本重新应用本工具托管的配置（worker 分组、过载保护、网卡、时区）→
+     执行数据库升级脚本 → 注册 worker 分组（3.2.x）→ 启服务
   8. 验证升级结果
 - `Get_Latest_Version()` — 获取最新版本
 - `Backup_Before_Upgrade()` — 升级前备份
@@ -300,6 +321,10 @@ zookeeper_ver=3.9.3
 - `Check_Disk()` — 检查磁盘空间
 - `Check_ZK_Connection()` — 检查 ZooKeeper 连接
 - `Check_DB_Connection()` — 检查数据库连接
+- `Check_Worker_Registry()` — 直接读注册中心校验派发链路：worker 是否注册、
+  注册到哪个分组（与 options.conf 的 workers 交叉比对）、serverStatus 是否 BUSY。
+  依赖 zkCli.sh（`zk_cli` 可指定路径），找不到时输出 [SKIP]
+  辅助函数：`_Find_Zk_Cli()` / `_Zk_Ls()` / `_Zk_Get()` / `_Report_Registry_Node()`
 - `Send_Alert()` — 告警通知（邮件 + Webhook）
 - `Monitor_DolphinScheduler_Status()` — 综合状态检查
 - `Auto_Recovery()` — 自动恢复

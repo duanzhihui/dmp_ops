@@ -313,8 +313,18 @@ Configure_Cluster_Interactive() {
   echo ""
   echo "Enter Worker node IPs with group (comma separated, format: ip:group)"
   echo "Example: 192.168.1.3:default,192.168.1.4:default"
+  echo "The group is applied for real: a workflow can only run on a group that"
+  echo "actually has workers, otherwise its tasks are never dispatched."
   read -e -p "Worker nodes (default: ${workers:-localhost:default}): " input_workers
   workers=${input_workers:-${workers:-localhost:default}}
+
+  # Network interface used to register into the registry
+  echo ""
+  echo "Network interface the servers should register with (e.g. eth0)."
+  echo "Leave empty to auto-detect; pin it when the nodes have several NICs,"
+  echo "otherwise a server may register an address the others cannot reach."
+  read -e -p "Preferred interface (default: ${network_interface_preferred:-auto}): " input_nic
+  [ -n "${input_nic}" ] && [ "${input_nic}" != "auto" ] && network_interface_preferred=${input_nic}
 
   # Alert server
   read -e -p "Alert server (default: ${alert_server:-localhost}): " input_alert_server
@@ -438,6 +448,10 @@ Save_Configuration() {
 
   # ZooKeeper configuration
   sed -i "s|^zk_hosts=.*|zk_hosts=${zk_hosts}|" ${ds_dir}/options.conf
+  sed -i "s|^registry_namespace=.*|registry_namespace=${registry_namespace:-dolphinscheduler}|" ${ds_dir}/options.conf
+
+  # Network configuration
+  sed -i "s|^network_interface_preferred=.*|network_interface_preferred=${network_interface_preferred}|" ${ds_dir}/options.conf
 
   # Cluster configuration
   sed -i "s|^ips=.*|ips=${ips}|" ${ds_dir}/options.conf
@@ -511,6 +525,15 @@ Show_Config_Summary() {
     echo "    API:      ${api_servers}"
     echo "    Alert:    ${alert_server}"
     echo "    SSH as:   ${ssh_user:-root}@<node>:${ssh_port}"
+  fi
+
+  if [ "${deploy_mode}" != "standalone" ]; then
+    echo ""
+    echo "  Dispatch related:"
+    echo "    Registry namespace:  ${registry_namespace:-dolphinscheduler}"
+    echo "    Preferred NIC:       ${network_interface_preferred:-auto-detect}"
+    echo "    Load protection:     ${server_load_protection_enabled:-false}"
+    echo "    Resource storage:    ${resource_storage_type:-LOCAL}"
   fi
   echo ""
 }

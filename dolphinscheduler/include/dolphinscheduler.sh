@@ -2,6 +2,92 @@
 # DolphinSchedulerStack - Apache DolphinScheduler Cluster Deployment Tool
 # DolphinScheduler installation and uninstallation functions
 
+#########################################################################
+# Generic config file editing helpers
+#########################################################################
+
+# All modules that ship a conf/ directory. 'standalone-server' only exists in
+# the standalone package, the others only in the cluster package; callers just
+# skip the ones that are missing.
+ds_all_modules=(tools alert-server api-server master-server worker-server standalone-server)
+
+# Set (or insert) a key inside a YAML block.
+# $1 = file
+# $2 = awk regex matching the block header line, e.g. '^worker:' or '^  jackson:'
+# $3 = indentation (in spaces) of the child key
+# $4 = key
+# $5 = value
+#
+# Only the first matching block is touched, so the multi-document profile
+# sections further down the file (mysql / postgresql / h2) stay untouched.
+# When the key is absent it is appended at the end of the block.
+Yaml_Set_Key() {
+  local file=$1 anchor=$2 ind=$3 key=$4 value=$5
+
+  [ -f "${file}" ] || return 0
+
+  awk -v anchor="${anchor}" -v ind="${ind}" -v key="${key}" -v value="${value}" '
+    function pad(n,  s) { s = ""; while (n-- > 0) s = s " "; return s }
+    BEGIN { sp = pad(ind + 0); inside = 0; done = 0; seen = 0 }
+    {
+      if (!seen && $0 ~ anchor) { seen = 1; inside = 1; print; next }
+
+      if (inside) {
+        # blank lines and comments belong to the block, keep scanning
+        if ($0 ~ /^[[:space:]]*$/ || $0 ~ /^[[:space:]]*#/) { print; next }
+
+        match($0, /^[ ]*/)
+        cur = RLENGTH
+
+        # dedented line: the block ended, insert the key before it
+        if (cur < ind + 0) {
+          if (!done) { print sp key ": " value; done = 1 }
+          inside = 0
+          print
+          next
+        }
+
+        if (cur == ind + 0 && index($0, sp key ":") == 1) {
+          print sp key ": " value
+          done = 1
+          next
+        }
+      }
+      print
+    }
+    END { if (inside && !done) print sp key ": " value }
+  ' "${file}" > "${file}.tmp" && mv "${file}.tmp" "${file}"
+}
+
+# Set (or insert) a key in a .properties file. A key that is present but
+# commented out is uncommented and reused, so the surrounding documentation
+# comments stay meaningful.
+# $1 = file, $2 = key, $3 = value
+Properties_Set() {
+  local file=$1 key=$2 value=$3
+
+  [ -f "${file}" ] || return 0
+
+  # '.' is the only regex metacharacter that occurs in DolphinScheduler keys
+  local key_re=${key//./\\.}
+  # protect the sed replacement text
+  local value_esc
+  value_esc=$(printf '%s' "${value}" | sed -e 's/[\\&|]/\\&/g')
+
+  if grep -qE "^[[:space:]]*#?[[:space:]]*${key_re}=" "${file}"; then
+    sed -i -E "s|^[[:space:]]*#?[[:space:]]*${key_re}=.*|${key}=${value_esc}|" "${file}"
+  else
+    echo "${key}=${value}" >> "${file}"
+  fi
+}
+
+# Return 0 when ${1} (e.g. 3.3.2) is >= ${2} (e.g. 3.3)
+Version_Ge() {
+  [ "$(printf '%s\n%s\n' "$2" "$1" | sort -V | head -1)" == "$2" ]
+}
+
+#########################################################################
+
 # Install DolphinScheduler Standalone mode
 Install_DolphinScheduler_Standalone() {
   local ds_ver=$1
@@ -65,6 +151,9 @@ EOF
     fi
     echo "${CSUCCESS}Environment variables configured in ${env_file}${CEND}"
   fi
+
+  Configure_Common_Properties
+  Configure_Timezone
 }
 
 # Install DolphinScheduler Pseudo-Cluster mode
@@ -102,14 +191,14 @@ Install_DolphinScheduler_PseudoCluster() {
   # Configure environment
   Configure_Env_PseudoCluster "${ds_ver}" || return 1
 
-  # Configure install_env.sh
-  Configure_Install_Env
-
-  # Initialize database (shared schema: only done once, on the first node)
+  # Initialize database (shared schema: only done once, on the first node).
+  # Worker groups live in the same shared schema on 3.2.x, so they are
+  # registered together with it.
   if [ "${skip_db_init}" == "y" ]; then
     echo "${CMSG}Skipping database initialization (schema already initialized by the first node).${CEND}"
   else
     Init_Database || return 1
+    Register_Worker_Groups_DB "${ds_ver}"
   fi
 
   # Set ownership
@@ -158,6 +247,7 @@ export SPRING_DATASOURCE_PASSWORD="${db_password}"
 export SPRING_DATASOURCE_DRIVER_CLASS_NAME=${driver_class}
 export REGISTRY_TYPE=zookeeper
 export REGISTRY_ZOOKEEPER_CONNECT_STRING=${zk_hosts}
+export REGISTRY_ZOOKEEPER_NAMESPACE=${registry_namespace:-dolphinscheduler}
 # End DolphinSchedulerStack Configuration
 EOF
 
@@ -168,29 +258,26 @@ EOF
   fi
 
   # Configure application.yaml files for each module
-  Configure_Application_Yaml
+  Configure_Application_Yaml "${ds_ver}"
+
+  # Configure common.properties (resource storage, network, working dir)
+  Configure_Common_Properties
+
+  # Align the JSON timezone of every module with options.conf
+  Configure_Timezone
 }
 
-# Configure install_env.sh
-Configure_Install_Env() {
-  local install_env_file="${dolphinscheduler_install_dir}/bin/env/install_env.sh"
-
-  echo "${CMSG}Configuring install_env.sh...${CEND}"
-
-  if [ -f "${install_env_file}" ]; then
-    sed -i "s|^ips=.*|ips=\"${ips}\"|" ${install_env_file}
-    sed -i "s|^sshPort=.*|sshPort=\"${ssh_port}\"|" ${install_env_file}
-    sed -i "s|^masters=.*|masters=\"${masters}\"|" ${install_env_file}
-    sed -i "s|^workers=.*|workers=\"${workers}\"|" ${install_env_file}
-    sed -i "s|^alertServer=.*|alertServer=\"${alert_server}\"|" ${install_env_file}
-    sed -i "s|^apiServers=.*|apiServers=\"${api_servers}\"|" ${install_env_file}
-    sed -i "s|^installPath=.*|installPath=${dolphinscheduler_install_dir}|" ${install_env_file}
-    sed -i "s|^deployUser=.*|deployUser=\"${run_user}\"|" ${install_env_file}
-  fi
-}
+# NOTE: bin/env/install_env.sh is deliberately NOT written.
+# It is only read by DolphinScheduler's own install.sh, which this toolkit
+# never runs (services are started through systemd units written by
+# Write_Service_Unit). Writing it would only create the illusion that
+# 'workers=ip:group' has been applied - the group is handled by
+# Configure_Worker_Group / Register_Worker_Groups_DB instead.
 
 # Configure application.yaml files
+# $1 = DolphinScheduler version (e.g. 3.3.2)
 Configure_Application_Yaml() {
+  local ds_ver=$1
   local modules=("tools" "alert-server" "api-server" "master-server" "worker-server")
 
   for module in "${modules[@]}"; do
@@ -215,16 +302,227 @@ Configure_Application_Yaml() {
           ;;
         master-server)
           Configure_Master_Server_Ports "${yaml_file}" "${master_rpc_port}" "${master_web_port}"
+          Configure_Load_Protection "${yaml_file}" "master"
           ;;
         worker-server)
           Configure_Worker_Server_Ports "${yaml_file}" "${worker_rpc_port}" "${worker_web_port}"
+          Configure_Worker_Group "${yaml_file}" "${ds_ver}"
+          Configure_Load_Protection "${yaml_file}" "worker"
           ;;
         alert-server)
           Configure_Alert_Server_Ports "${yaml_file}" "${alert_rpc_port}" "${alert_web_port}"
           ;;
       esac
+
+      # Every role must use the same registry namespace, otherwise masters and
+      # workers register into different trees and never see each other.
+      Yaml_Set_Key "${yaml_file}" '^  zookeeper:' 4 "namespace" "${registry_namespace:-dolphinscheduler}"
     fi
   done
+}
+
+# Resolve the worker group of the local node from the 'workers' list
+# (format: ip:group,ip:group). Falls back to 'default'.
+Get_Local_Worker_Group() {
+  local entry ip group
+  for entry in ${workers//,/ }; do
+    ip=${entry%%:*}
+    group=${entry#*:}
+    [ "${group}" == "${entry}" ] && group="default"
+    if Is_Local_Node "${ip}"; then
+      echo "${group:-default}"
+      return 0
+    fi
+  done
+  echo "default"
+  return 1
+}
+
+# Configure the worker group of this node.
+#
+# DolphinScheduler 3.3+ takes the group from worker.group in application.yaml
+# and registers under /<namespace>/nodes/worker/<group>/<host:port>.
+# DolphinScheduler 3.2.x has no such setting: groups live in the
+# t_ds_worker_group table and are written by Register_Worker_Groups_DB.
+#
+# $1 = worker-server application.yaml, $2 = DolphinScheduler version
+Configure_Worker_Group() {
+  local yaml_file=$1
+  local ds_ver=$2
+  local group
+
+  group=$(Get_Local_Worker_Group) || \
+    echo "${CWARNING}This node is not listed in 'workers', falling back to group 'default'.${CEND}"
+
+  if Version_Ge "${ds_ver}" "3.3"; then
+    echo "${CMSG}Configuring worker group: ${group}...${CEND}"
+    Yaml_Set_Key "${yaml_file}" '^worker:' 2 "group" "${group}"
+  else
+    echo "${CMSG}DolphinScheduler ${ds_ver}: worker group '${group}' is registered in t_ds_worker_group.${CEND}"
+  fi
+}
+
+# Configure master/worker overload protection.
+# With the shipped defaults (0.7 in 3.2.x, 0.8 in 3.3+) a node that is merely
+# a bit loaded reports itself BUSY; the master then refuses to dispatch to it
+# and task instances keep an empty host.
+#
+# $1 = application.yaml, $2 = section (master|worker)
+Configure_Load_Protection() {
+  local yaml_file=$1
+  local section=$2
+  local enabled=${server_load_protection_enabled:-false}
+
+  echo "${CMSG}Configuring ${section} server-load-protection (enabled=${enabled})...${CEND}"
+
+  Yaml_Set_Key "${yaml_file}" '^  server-load-protection:' 4 "enabled" "${enabled}"
+
+  if [ "${enabled}" == "true" ]; then
+    Yaml_Set_Key "${yaml_file}" '^  server-load-protection:' 4 \
+      "max-system-cpu-usage-percentage-thresholds" "${server_load_protection_max_cpu:-0.9}"
+    Yaml_Set_Key "${yaml_file}" '^  server-load-protection:' 4 \
+      "max-jvm-cpu-usage-percentage-thresholds" "${server_load_protection_max_jvm_cpu:-0.9}"
+    Yaml_Set_Key "${yaml_file}" '^  server-load-protection:' 4 \
+      "max-system-memory-usage-percentage-thresholds" "${server_load_protection_max_memory:-0.9}"
+    Yaml_Set_Key "${yaml_file}" '^  server-load-protection:' 4 \
+      "max-disk-usage-percentage-thresholds" "${server_load_protection_max_disk:-0.9}"
+  fi
+}
+
+# Align spring.jackson.time-zone of every module with options.conf.
+# The packages ship 'UTC', which makes every timestamp in the UI (and in the
+# task instance list you look at while debugging) off by the UTC offset.
+Configure_Timezone() {
+  local tz=${timezone}
+  [ -z "${tz}" ] && return 0
+
+  echo "${CMSG}Configuring timezone: ${tz}...${CEND}"
+
+  local module yaml_file
+  for module in "${ds_all_modules[@]}"; do
+    yaml_file="${dolphinscheduler_install_dir}/${module}/conf/application.yaml"
+    [ -f "${yaml_file}" ] || continue
+    Yaml_Set_Key "${yaml_file}" '^  jackson:' 4 "time-zone" "${tz}"
+  done
+}
+
+# Configure conf/common.properties of every module.
+#
+# Without this the resource storage settings collected in options.conf are
+# never applied, and - more importantly - the network settings keep their
+# defaults, so on a multi-NIC host a server may register an address the other
+# nodes cannot reach (task dispatch then fails and host stays empty).
+Configure_Common_Properties() {
+  echo "${CMSG}Configuring common.properties...${CEND}"
+
+  local storage=${resource_storage_type:-LOCAL}
+  local basedir=${data_basedir_path:-/data/dolphinscheduler/exec}
+
+  if [ "${deploy_mode}" == "cluster" ] && [ "${storage}" == "LOCAL" ]; then
+    echo "${CWARNING}resource_storage_type=LOCAL in cluster mode: ${resource_local_path} must be a shared mount,${CEND}"
+    echo "${CWARNING}otherwise a task will not find resources uploaded through another node.${CEND}"
+  fi
+
+  mkdir -p "${basedir}"
+  chown -R ${run_user}:${run_group} "${basedir}" 2>/dev/null
+
+  local module prop
+  for module in "${ds_all_modules[@]}"; do
+    prop="${dolphinscheduler_install_dir}/${module}/conf/common.properties"
+    [ -f "${prop}" ] || continue
+
+    Properties_Set "${prop}" "data.basedir.path" "${basedir}"
+    Properties_Set "${prop}" "resource.storage.type" "${storage}"
+
+    case "${storage}" in
+      LOCAL)
+        # LOCAL is HDFS with a file:/// defaultFS
+        mkdir -p "${resource_local_path:-/data/dolphinscheduler/resource}"
+        chown -R ${run_user}:${run_group} "${resource_local_path:-/data/dolphinscheduler/resource}" 2>/dev/null
+        Properties_Set "${prop}" "resource.storage.upload.base.path" "${resource_local_path:-/data/dolphinscheduler/resource}"
+        Properties_Set "${prop}" "resource.hdfs.fs.defaultFS" "file:///"
+        ;;
+      HDFS)
+        Properties_Set "${prop}" "resource.storage.upload.base.path" "${hdfs_root_path:-/dolphinscheduler}"
+        Properties_Set "${prop}" "resource.hdfs.fs.defaultFS" "${hdfs_defaultfs}"
+        Properties_Set "${prop}" "resource.hdfs.root.user" "${hdfs_root_user:-hdfs}"
+        ;;
+      S3)
+        Properties_Set "${prop}" "resource.storage.upload.base.path" "${hdfs_root_path:-/dolphinscheduler}"
+        Properties_Set "${prop}" "resource.aws.s3.endpoint" "${s3_endpoint}"
+        Properties_Set "${prop}" "resource.aws.access.key.id" "${s3_access_key}"
+        Properties_Set "${prop}" "resource.aws.secret.access.key" "${s3_secret_key}"
+        Properties_Set "${prop}" "resource.aws.region" "${s3_region}"
+        Properties_Set "${prop}" "resource.aws.s3.bucket.name" "${s3_bucket}"
+        ;;
+    esac
+
+    # Registry address selection
+    if [ -n "${network_interface_preferred}" ]; then
+      Properties_Set "${prop}" "dolphin.scheduler.network.interface.preferred" "${network_interface_preferred}"
+    fi
+    Properties_Set "${prop}" "dolphin.scheduler.network.interface.restrict" "${network_interface_restrict:-docker0}"
+    Properties_Set "${prop}" "dolphin.scheduler.network.priority.strategy" "${network_priority_strategy:-default}"
+  done
+
+  echo "${CSUCCESS}common.properties configured (storage=${storage}).${CEND}"
+}
+
+# Register the worker groups declared in 'workers' into t_ds_worker_group.
+# Only needed for DolphinScheduler 3.2.x, where the group is a database
+# mapping from group name to a list of <ip>:<worker listen port>.
+# Runs once, on the node that initializes the shared schema.
+Register_Worker_Groups_DB() {
+  local ds_ver=$1
+
+  Version_Ge "${ds_ver}" "3.3" && return 0
+
+  # Build "group -> addr list" from workers=ip:group,...
+  local entry ip group groups="" addrs
+  declare -A group_addrs=()
+  for entry in ${workers//,/ }; do
+    ip=${entry%%:*}
+    group=${entry#*:}
+    [ "${group}" == "${entry}" ] && group="default"
+    # 'default' is implicit in 3.2.x: it matches every registered worker
+    [ "${group}" == "default" ] && continue
+    if [ -z "${group_addrs[${group}]:-}" ]; then
+      group_addrs[${group}]="${ip}:${worker_rpc_port:-1234}"
+      groups="${groups} ${group}"
+    else
+      group_addrs[${group}]="${group_addrs[${group}]},${ip}:${worker_rpc_port:-1234}"
+    fi
+  done
+
+  [ -z "${groups}" ] && return 0
+
+  echo "${CMSG}Registering worker groups in t_ds_worker_group:${groups}${CEND}"
+
+  local sql=""
+  for group in ${groups}; do
+    addrs="${group_addrs[${group}]}"
+    if [ "${db_type}" == "mysql" ]; then
+      sql="${sql} INSERT INTO t_ds_worker_group (name, addr_list, create_time, update_time, description) VALUES ('${group}', '${addrs}', NOW(), NOW(), 'created by DolphinSchedulerStack') ON DUPLICATE KEY UPDATE addr_list='${addrs}', update_time=NOW();"
+    else
+      sql="${sql} INSERT INTO t_ds_worker_group (name, addr_list, create_time, update_time, description) VALUES ('${group}', '${addrs}', NOW(), NOW(), 'created by DolphinSchedulerStack') ON CONFLICT (name) DO UPDATE SET addr_list='${addrs}', update_time=NOW();"
+    fi
+  done
+
+  local rc=0
+  if [ "${db_type}" == "mysql" ]; then
+    mysql -h${db_host} -P${db_port} -u${db_user} -p"${db_password}" ${db_name} -e "${sql}" || rc=1
+  else
+    PGPASSWORD="${db_password}" psql -h ${db_host} -p ${db_port} -U ${db_user} -d ${db_name} -c "${sql}" || rc=1
+  fi
+
+  if [ ${rc} -ne 0 ]; then
+    echo "${CWARNING}Failed to register worker groups. Create them manually in${CEND}"
+    echo "${CWARNING}Security -> Worker Group Manage, otherwise tasks bound to${CEND}"
+    echo "${CWARNING}these groups will never be dispatched (empty host).${CEND}"
+    return 1
+  fi
+
+  echo "${CSUCCESS}Worker groups registered.${CEND}"
 }
 
 # Configure Master Server ports (RPC port and Web port)

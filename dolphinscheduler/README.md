@@ -138,7 +138,7 @@ alert_web_port=50053
 # 集群节点配置（cluster 模式必须）
 ips=localhost
 masters=localhost
-workers=localhost:default
+workers=localhost:default   # ip:分组，分组会真正生效，见下文
 alert_server=localhost
 api_servers=localhost
 
@@ -146,9 +146,44 @@ api_servers=localhost
 ssh_port=22
 ssh_user=root
 ssh_key_file=          # 留空表示使用 ssh_user 的默认密钥
+
+# 注册中心命名空间（所有角色必须一致）
+registry_namespace=dolphinscheduler
+
+# 过载保护（DolphinScheduler 原生默认开启且阈值偏低）
+server_load_protection_enabled=false
+server_load_protection_max_cpu=0.9
+server_load_protection_max_jvm_cpu=0.9
+server_load_protection_max_memory=0.9
+server_load_protection_max_disk=0.9
+
+# 注册地址所用网卡（多网卡机器务必指定）
+network_interface_preferred=      # 例如 eth0，留空自动探测
+network_interface_restrict=docker0
+network_priority_strategy=default
+
+# 任务执行工作目录（common.properties: data.basedir.path）
+data_basedir_path=/data/dolphinscheduler/exec
 ```
 
 > 填写了 `db_password` 后建议 `chmod 600 options.conf`。
+
+### 影响任务派发的三项配置
+
+任务实例的 `host` 字段只有在 **Master 成功把任务派发给某个 Worker 之后**才会写入。
+以下三项任何一项不对，任务都会停在「提交成功」且 `host` 为空：
+
+| 配置项 | 作用 | 不配会怎样 |
+|--------|------|-----------|
+| `workers=ip:分组` | 3.3+ 写入 `worker-server/conf/application.yaml` 的 `worker.group`；<br>3.2.x 写入 `t_ds_worker_group` 表 | 工作流选了某个分组，但该分组下没有 Worker，任务永远派发不出去 |
+| `server_load_protection_*` | Master / Worker 的过载保护开关与阈值 | 原生默认阈值 0.7（3.2.x）/ 0.8（3.3+），节点内存或磁盘稍高就上报 BUSY，Master 直接跳过该 Worker |
+| `network_interface_preferred` | 服务注册到注册中心时使用的网卡 | 多网卡机器可能注册一个别的节点路由不到的 IP，派发时 RPC 连接失败 |
+
+这三项都会在 `install.sh` / `upgrade.sh` 时自动落到各模块的 `application.yaml`
+与 `common.properties`，`./monitor.sh --check` 也会直接读注册中心校验实际生效情况。
+
+> `bin/env/install_env.sh` **不会**被本工具写入：它只被 DolphinScheduler 自带的
+> `install.sh` 读取，而本工具全程使用自己生成的 systemd unit 启动服务。
 
 ## 服务管理
 
@@ -225,6 +260,33 @@ cluster 模式下只需在控制节点（`options.conf` 中配置了 `ips` 的�
 
 ```bash
 ./monitor.sh --check
+```
+
+除进程 / 端口 / HTTP / 磁盘外，还会直接读取注册中心（ZooKeeper）校验：
+
+- Worker 是否真的注册成功（没有注册 → 任务 `host` 必为空）
+- 注册到了哪个 Worker 分组，与 `options.conf` 中 `workers=ip:分组` 是否一致
+- 每个 Worker 上报的 `serverStatus` 是 `NORMAL` 还是 `BUSY`（过载保护）
+
+这一项需要 `zkCli.sh`；找不到时会输出 `[SKIP]`，可在 `options.conf` 的
+`zk_cli` 中指定绝对路径。
+
+### 任务实例 host 为空的排查
+
+```bash
+# 1. 任务实例选的是哪个 worker group
+mysql -h<db_host> -u<db_user> -p <db_name> -e \
+  "select id,name,state,host,worker_group,submit_time from t_ds_task_instance order by id desc limit 10;"
+
+# 2. 注册中心里到底有哪些 worker、在哪个组下、是否 BUSY
+./monitor.sh --check
+
+# 3. Master 有没有在喊找不到 worker
+grep -E "NoSuitableWorker|Cannot find worker|dispatch.*fail|Connection refused" \
+  /opt/dolphinscheduler/master-server/logs/dolphinscheduler-master.log | tail -50
+
+# 4. 从 Master 节点验证 Worker RPC 端口可达
+nc -vz <worker_ip> 1234
 ```
 
 ### 持续监控

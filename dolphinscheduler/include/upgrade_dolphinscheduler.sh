@@ -79,12 +79,22 @@ Upgrade_DolphinScheduler() {
     cp -f ${backup_dir}/bin/env/install_env.sh ${dolphinscheduler_install_dir}/bin/env/
   fi
 
-  # Restore application.yaml files
+  # Restore application.yaml / common.properties files
   for module in alert-server api-server master-server worker-server; do
     if [ -f "${backup_dir}/${module}/conf/application.yaml" ]; then
       cp -f ${backup_dir}/${module}/conf/application.yaml ${dolphinscheduler_install_dir}/${module}/conf/
     fi
+    if [ -f "${backup_dir}/${module}/conf/common.properties" ]; then
+      cp -f ${backup_dir}/${module}/conf/common.properties ${dolphinscheduler_install_dir}/${module}/conf/
+    fi
   done
+
+  # Re-apply the settings this toolkit owns. The restored files come from the
+  # previous version, so version dependent options (notably worker.group,
+  # which only exists from 3.3 on) have to be recomputed for ${new_ver}.
+  Configure_Application_Yaml "${new_ver}"
+  Configure_Common_Properties
+  Configure_Timezone
 
   # Restore MySQL JDBC driver if exists
   if [ "${db_type}" == "mysql" ]; then
@@ -104,6 +114,9 @@ Upgrade_DolphinScheduler() {
     bash bin/upgrade-schema.sh
     popd > /dev/null
   fi
+
+  # Worker groups live in the metadata schema on 3.2.x
+  Register_Worker_Groups_DB "${new_ver}"
 
   # Set ownership
   chown -R ${run_user}:${run_group} ${dolphinscheduler_install_dir}

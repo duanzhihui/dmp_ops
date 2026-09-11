@@ -27,6 +27,8 @@ Ensure_Options_Conf "${ds_dir}"
 . ./include/download.sh
 . ./include/check_env.sh
 . ./include/dolphinscheduler.sh
+# cluster.sh provides Is_Local_Node, needed to resolve this node's worker group
+. ./include/cluster.sh
 . ./include/upgrade_dolphinscheduler.sh
 
 Show_Help() {
