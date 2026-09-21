@@ -92,7 +92,9 @@ Check_Running_Jobs() {
   local jobs_response=$(curl -s --connect-timeout 5 --max-time 10 "http://${host}:${port}/hazelcast/rest/maps/running-jobs" 2>/dev/null)
   
   if [ -n "${jobs_response}" ]; then
-    local job_count=$(echo "${jobs_response}" | grep -oP '"jobId"' | wc -l)
+    # 每个 job 的 jobDag 内部还嵌套一个 jobId，直接 grep 会重复计数
+    local job_count=$(echo "${jobs_response}" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null)
+    job_count=${job_count:-0}
     echo "  Running jobs: ${job_count}"
     
     if [ ${job_count} -gt 0 ]; then
