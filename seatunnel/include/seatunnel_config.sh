@@ -5,6 +5,9 @@
 # Project home page:
 #       https://github.com/oneinstack/oneinstack
 
+# Size_To_MB 等工具函数来自 tune_memory.sh（入口脚本已 source，此处兜底）
+declare -F Size_To_MB > /dev/null 2>&1 || . "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/tune_memory.sh"
+
 Generate_Seatunnel_Yaml() {
   local config_dir=${1:-${seatunnel_install_dir}/config}
   local backup_count=${imap_backup_count:-1}
@@ -116,13 +119,51 @@ Generate_JVM_Options() {
   local config_dir=${1:-${seatunnel_install_dir}/config}
   local heap_size=${jvm_heap_size:-2g}
   local metaspace=${jvm_metaspace_size:-256m}
+  local client_heap=${jvm_client_heap_size:-512m}
   local mode=${2:-hybrid}
 
   echo "${CMSG}Generating JVM options for ${mode} mode...${CEND}"
 
+  local heap_mb
+  heap_mb=$(Size_To_MB "${heap_size}")
+
+  # Direct memory（Zeta 引擎 shuffle 使用堆外内存），未配置时按堆大小分档
+  local direct=${jvm_direct_memory_size:-}
+  [ -z "${direct}" ] && direct=$(Get_Auto_Direct "${heap_size}")
+
+  # GC 并行线程，未配置时按 CPU 线程数计算（<=8 核全用，>8 核取 5/8）
+  local gc_threads=${jvm_gc_threads:-}
+  if [ -z "${gc_threads}" ] && [ -n "${THREAD}" ]; then
+    if [ "${THREAD}" -le 8 ] 2>/dev/null; then
+      gc_threads=${THREAD}
+    else
+      gc_threads=$(( THREAD * 5 / 8 ))
+    fi
+  fi
+
+  # 大堆（>=8g）附加 G1 调优参数
+  local g1_tuning=""
+  if [ ${heap_mb} -ge 8192 ]; then
+    g1_tuning="-XX:MaxGCPauseMillis=200
+-XX:InitiatingHeapOccupancyPercent=45"
+  fi
+  if [ ${heap_mb} -gt 32768 ]; then
+    g1_tuning="${g1_tuning}
+-XX:G1HeapRegionSize=32m"
+  elif [ ${heap_mb} -gt 16384 ]; then
+    g1_tuning="${g1_tuning}
+-XX:G1HeapRegionSize=16m"
+  elif [ ${heap_mb} -gt 8192 ]; then
+    g1_tuning="${g1_tuning}
+-XX:G1HeapRegionSize=8m"
+  fi
+
   local jvm_content="# JVM Heap
 -Xms${heap_size}
 -Xmx${heap_size}
+
+# Direct Memory (Zeta engine shuffle)
+-XX:MaxDirectMemorySize=${direct}
 
 # JVM Dump
 -XX:+HeapDumpOnOutOfMemoryError
@@ -133,6 +174,23 @@ Generate_JVM_Options() {
 
 # G1GC
 -XX:+UseG1GC"
+
+  if [ -n "${gc_threads}" ]; then
+    local conc_threads=$(( gc_threads / 4 ))
+    [ ${conc_threads} -lt 1 ] && conc_threads=1
+    jvm_content="${jvm_content}
+
+# GC Threads
+-XX:ParallelGCThreads=${gc_threads}
+-XX:ConcGCThreads=${conc_threads}"
+  fi
+
+  if [ -n "${g1_tuning}" ]; then
+    jvm_content="${jvm_content}
+
+# G1 Tuning (large heap)
+${g1_tuning}"
+  fi
 
   if [ "${mode}" == "hybrid" ]; then
     echo "${jvm_content}" > ${config_dir}/jvm_options
@@ -146,8 +204,8 @@ Generate_JVM_Options() {
   # Client JVM options (smaller heap)
   cat > ${config_dir}/jvm_client_options << EOF
 # JVM Heap
--Xms512m
--Xmx512m
+-Xms${client_heap}
+-Xmx${client_heap}
 
 # Metaspace
 -XX:MaxMetaspaceSize=128m

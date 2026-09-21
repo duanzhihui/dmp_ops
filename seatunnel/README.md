@@ -20,6 +20,7 @@
   - [uninstall.sh — 卸载](#uninstallsh--卸载)
   - [upgrade.sh — 升级 / 回滚](#upgradesh--升级--回滚)
   - [cluster.sh — 集群管理](#clustersh--集群管理)
+  - [tune.sh — JVM 调优](#tunesh--jvm-调优)
   - [monitor.sh — 监控](#monitorsh--监控)
   - [backup.sh — 备份](#backupsh--备份)
   - [backup_setup.sh — 备份配置向导](#backup_setupsh--备份配置向导)
@@ -34,6 +35,7 @@
 
 - **三种部署模式**：`local`（单机）、`hybrid`（混合集群）、`separated`（分离集群，生产推荐）
 - **交互式 + 命令行**：既支持菜单式交互安装，也支持参数化无人值守安装
+- **JVM 自动调优**：根据系统内存大小与 CPU 核数自动推荐堆 / 堆外内存 / Metaspace / GC 线程等参数，并做内存预算校验，防止被 OOM killer 杀掉
 - **多节点集群部署**：基于 SSH/SCP 一键部署、扩容、缩容
 - **配置自动生成**：根据 `options.conf` 自动渲染 `seatunnel.yaml`、`hazelcast.yaml`、`hazelcast-client.yaml`、JVM 参数、`plugin_config`
 - **Systemd 托管**：自动注册并启用 `seatunnel` / `seatunnel-master` / `seatunnel-worker` 服务
@@ -53,6 +55,7 @@ seatunnel/
 ├── uninstall.sh            # 卸载脚本
 ├── upgrade.sh              # 升级 / 回滚脚本
 ├── cluster.sh              # 集群部署与管理
+├── tune.sh                 # JVM / 内存参数调优（按系统资源推荐）
 ├── monitor.sh              # 监控与健康检查
 ├── backup.sh               # 备份执行脚本
 ├── backup_setup.sh         # 备份配置向导（含 cron）
@@ -73,6 +76,7 @@ seatunnel/
 │   ├── get_char.sh         # 交互输入辅助
 │   ├── seatunnel.sh        # 安装 / 卸载主流程
 │   ├── seatunnel_config.sh # 配置文件生成
+│   ├── tune_memory.sh      # JVM / 内存调优（推荐算法与工具函数）
 │   ├── monitor_seatunnel.sh# 监控与告警
 │   └── upgrade_seatunnel.sh# 升级与回滚
 └── init.d/                 # systemd 服务单元
@@ -151,7 +155,10 @@ Options:
   --cluster_members IPs       集群成员，逗号分隔 (默认: 127.0.0.1)
   --node_role ROLE            separated 模式节点角色: master, worker
   --connectors LIST           待安装连接器，逗号分隔
-  --jvm_heap SIZE             JVM 堆大小 (默认: 2g)
+  --jvm_auto_tune             按系统内存/CPU 自动调优 JVM 参数（默认开启，可用 options.conf 的 jvm_auto_tune=false 关闭）
+  --jvm_heap SIZE             JVM 堆大小（默认: 按系统内存自动推荐）
+  --jvm_metaspace SIZE        Metaspace 大小（默认: 按堆大小自动分档）
+  --jvm_direct_memory SIZE    堆外内存大小（默认: 约为堆的 50%）
 ```
 
 安装流程（见 `include/seatunnel.sh`）：
@@ -231,6 +238,40 @@ Options:
 
 工作方式：将整个 `seatunnel` 目录通过 SCP 推送到目标节点 `/tmp/seatunnel_deploy/`，再远程以 `-q` 静默模式调用 `install.sh`，并同步更新所有节点 `options.conf` 中的 `cluster_members`。
 
+### tune.sh — JVM 调优
+
+根据系统内存大小与 CPU 核数，推荐并可选应用 JVM / 内存参数优化。
+
+```text
+Usage: tune.sh [OPTIONS]
+
+Options:
+  -h, --help        显示帮助
+  --show            仅显示调优报告（默认行为）
+  --apply           应用推荐参数（写回 options.conf 并重新生成 JVM 配置文件）
+  --restart         配合 --apply：应用后重启 SeaTunnel 服务
+  -q, --quiet       静默模式
+```
+
+推荐算法（见 `include/tune_memory.sh`）：
+
+| 参数 | 推荐规则 |
+|------|---------|
+| JVM 堆（-Xms/-Xmx） | 系统内存 <8g 取 40%、>=8g 取 50%，上限 32g；separated 模式 master 角色再乘 0.6；按 512MB 取整 |
+| 堆外内存（MaxDirectMemorySize） | 约为堆的 50%，上限 4g（Zeta 引擎 shuffle 使用） |
+| Metaspace | 按堆大小分档：<=2g 给 256m、<=8g 给 384m、更大给 512m |
+| GC 并行线程（ParallelGCThreads） | CPU <=8 核全用，>8 核取 5/8 |
+| 大堆 G1 调优 | 堆 >=8g 追加 MaxGCPauseMillis=200 / IHOP=45，堆 >8g/16g/32g 分别设置 RegionSize 8m/16m/32m |
+| 客户端堆 | 系统内存 <4g 给 256m，否则 512m |
+
+报告同时输出内存预算校验（heap + direct + metaspace 对比系统内存减去预留），超出时告警 OOM 风险；并给出系统级建议（swap 大小、vm.swappiness、透明大页 THP，仅提示不自动修改）。
+
+```bash
+./tune.sh                        # 查看调优报告
+./tune.sh --apply                # 应用推荐参数（需重启服务生效）
+./tune.sh --apply --restart -q   # 静默应用并重启服务
+```
+
 ### monitor.sh — 监控
 
 ```text
@@ -300,8 +341,12 @@ Usage: monitor.sh [OPTIONS]
 | `cluster_members` | `127.0.0.1` | 集群成员 IP（逗号分隔） |
 | `node_role` | `master` | separated 模式节点角色 |
 | `hazelcast_port` | `5801` | Hazelcast 通信端口 |
-| `jvm_heap_size` | `2g` | JVM 堆大小 |
-| `jvm_metaspace_size` | `256m` | Metaspace 大小 |
+| `jvm_auto_tune` | `true` | JVM 自动调优开关：`true` 时留空的 JVM 配置项采用按系统资源计算的推荐值 |
+| `jvm_heap_size` | （空） | JVM 堆大小（如 `2g` / `1536m`），留空则按系统内存自动推荐 |
+| `jvm_metaspace_size` | （空） | Metaspace 大小，留空则按堆大小自动分档 |
+| `jvm_direct_memory_size` | （空） | 堆外内存（Zeta shuffle），留空则约为堆的 50% |
+| `jvm_client_heap_size` | （空） | 客户端（提交作业进程）堆大小，留空则按系统内存自动分档 |
+| `jvm_gc_threads` | （空） | GC 并行线程数，留空则按 CPU 线程数自动计算 |
 | `connectors` | `connector-fake,connector-console` | 待安装连接器列表 |
 | `checkpoint_interval` | `10000` | Checkpoint 间隔（ms） |
 | `checkpoint_timeout` | `60000` | Checkpoint 超时（ms） |
@@ -413,6 +458,19 @@ ssh 192.168.1.3 'systemctl start seatunnel-worker'
 ./upgrade.sh -v 2.3.14
 # 升级失败后回滚
 ./upgrade.sh --rollback /tmp/seatunnel_upgrade_backup_xxx
+```
+
+### JVM 参数调优
+
+```bash
+# 查看当前配置与推荐值对比、内存预算、系统级建议
+./tune.sh
+
+# 应用推荐参数并重启服务
+./tune.sh --apply --restart -q
+
+# 安装时手动指定堆大小（其余参数仍按系统资源自动推荐）
+./install.sh --jvm_heap 4g -q
 ```
 
 ### 配置定时备份到 OSS

@@ -28,6 +28,7 @@ Ensure_Options_Conf "${seatunnel_dir}"
 . ./include/check_java.sh
 . ./include/download.sh
 . ./include/get_char.sh
+. ./include/tune_memory.sh
 . ./include/seatunnel_config.sh
 . ./include/seatunnel.sh
 
@@ -47,7 +48,8 @@ Show_Help() {
   echo "  --cluster_members IPs       Cluster members, comma-separated (default: 127.0.0.1)"
   echo "  --node_role ROLE            Node role for separated mode: master, worker"
   echo "  --connectors LIST           Connectors to install, comma-separated"
-  echo "  --jvm_heap SIZE             JVM heap size (default: 2g)"
+  echo "  --jvm_auto_tune            Auto-tune JVM params based on system memory/CPU"
+  echo "  --jvm_heap SIZE            JVM heap size (default: auto-recommended by memory)"
   echo
   echo "Examples:"
   echo "  $0                                    # Interactive mode"
@@ -59,11 +61,12 @@ Show_Help() {
 
 # Parse arguments
 ARG_NUM=$#
-TEMP=$(getopt -o hvq --long help,version,quiet,deploy_mode:,cluster_name:,cluster_members:,node_role:,connectors:,jvm_heap: -- "$@" 2>/dev/null)
+TEMP=$(getopt -o hvq --long help,version,quiet,deploy_mode:,cluster_name:,cluster_members:,node_role:,connectors:,jvm_auto_tune,jvm_heap:,jvm_metaspace:,jvm_direct_memory: -- "$@" 2>/dev/null)
 [ $? != 0 ] && { echo "Invalid options"; Show_Help; exit 1; }
 eval set -- "${TEMP}"
 
 quiet_mode=false
+heap_explicit=false
 while true; do
   case "$1" in
     -h|--help)
@@ -98,8 +101,21 @@ while true; do
       connectors=$2
       shift 2
       ;;
+    --jvm_auto_tune)
+      jvm_auto_tune=true
+      shift
+      ;;
     --jvm_heap)
       jvm_heap_size=$2
+      heap_explicit=true
+      shift 2
+      ;;
+    --jvm_metaspace)
+      jvm_metaspace_size=$2
+      shift 2
+      ;;
+    --jvm_direct_memory)
+      jvm_direct_memory_size=$2
       shift 2
       ;;
     --)
@@ -193,8 +209,26 @@ Show_Menu() {
   # JVM configuration
   echo
   echo "${CMSG}JVM Configuration:${CEND}"
-  read -e -p "JVM heap size (default: ${jvm_heap_size}): " input_heap
-  jvm_heap_size=${input_heap:-${jvm_heap_size}}
+  if [ "${jvm_auto_tune}" == "true" ]; then
+    local tune_role
+    if [ "${deploy_mode}" == "separated" ]; then tune_role=${node_role}; else tune_role=${deploy_mode}; fi
+    Recommend_JVM_By_Mem "${Mem:-0}" "${tune_role}"
+    echo "  Detected system memory: ${Mem:-unknown} MB, CPU threads: ${THREAD:-unknown}"
+    echo "  Recommended: heap=${REC_HEAP}  metaspace=${REC_METASPACE}  direct=${REC_DIRECT}  client-heap=${REC_CLIENT_HEAP}"
+    read -e -p "JVM heap size (default: ${REC_HEAP}, press Enter to accept): " input_heap
+    if [ -z "${input_heap}" ]; then
+      jvm_heap_size=${REC_HEAP}
+      jvm_metaspace_size=${REC_METASPACE}
+      jvm_direct_memory_size=${REC_DIRECT}
+      jvm_client_heap_size=${REC_CLIENT_HEAP}
+      jvm_gc_threads=${REC_GC_THREADS}
+    else
+      jvm_heap_size=${input_heap}
+    fi
+  else
+    read -e -p "JVM heap size (default: ${jvm_heap_size:-2g}): " input_heap
+    jvm_heap_size=${input_heap:-${jvm_heap_size:-2g}}
+  fi
 
   # Connectors configuration
   echo
@@ -222,6 +256,8 @@ Show_Menu() {
   fi
   echo "Install Directory: ${seatunnel_install_dir}"
   echo "JVM Heap Size:     ${jvm_heap_size}"
+  echo "Metaspace:         ${jvm_metaspace_size:-auto}"
+  echo "Direct Memory:     ${jvm_direct_memory_size:-auto}"
   echo "Connectors:        ${connectors}"
   echo "=========================================="
   echo
@@ -229,13 +265,26 @@ Show_Menu() {
 
 # Main installation
 Do_Install() {
+  # JVM 自动调优：未显式指定的参数采用按系统内存计算的推荐值
+  if [ "${jvm_auto_tune}" == "true" ]; then
+    Tune_JVM_Auto
+  fi
+  # 未显式指定时的兜底值（jvm_auto_tune=false 且未配置）
+  jvm_heap_size=${jvm_heap_size:-2g}
+  jvm_metaspace_size=${jvm_metaspace_size:-256m}
+
   # Update options.conf with user selections
-  sed -i "s@^deploy_mode=.*@deploy_mode=${deploy_mode}@" ${seatunnel_dir}/options.conf
-  sed -i "s@^cluster_name=.*@cluster_name=${cluster_name}@" ${seatunnel_dir}/options.conf
-  sed -i "s@^cluster_members=.*@cluster_members=${cluster_members}@" ${seatunnel_dir}/options.conf
-  sed -i "s@^node_role=.*@node_role=${node_role}@" ${seatunnel_dir}/options.conf
-  sed -i "s@^jvm_heap_size=.*@jvm_heap_size=${jvm_heap_size}@" ${seatunnel_dir}/options.conf
-  sed -i "s@^connectors=.*@connectors=${connectors}@" ${seatunnel_dir}/options.conf
+  Update_Opt_Conf deploy_mode "${deploy_mode}"
+  Update_Opt_Conf cluster_name "${cluster_name}"
+  Update_Opt_Conf cluster_members "${cluster_members}"
+  Update_Opt_Conf node_role "${node_role}"
+  Update_Opt_Conf jvm_auto_tune "${jvm_auto_tune:-false}"
+  Update_Opt_Conf jvm_heap_size "${jvm_heap_size}"
+  Update_Opt_Conf jvm_metaspace_size "${jvm_metaspace_size}"
+  Update_Opt_Conf jvm_direct_memory_size "${jvm_direct_memory_size}"
+  Update_Opt_Conf jvm_client_heap_size "${jvm_client_heap_size}"
+  Update_Opt_Conf jvm_gc_threads "${jvm_gc_threads}"
+  Update_Opt_Conf connectors "${connectors}"
 
   # Install SeaTunnel
   Install_SeaTunnel
@@ -257,6 +306,13 @@ if [ ${ARG_NUM} -eq 0 ]; then
   Do_Install
 else
   # Command line mode
+  # 命令行模式下 JVM 参数为空时先按系统内存计算推荐值（用于摘要展示与安装）
+  if [ "${jvm_auto_tune}" == "true" ]; then
+    Tune_JVM_Auto
+  fi
+  jvm_heap_size=${jvm_heap_size:-2g}
+  jvm_metaspace_size=${jvm_metaspace_size:-256m}
+
   if [ "${quiet_mode}" != "true" ]; then
     echo
     echo "${CMSG}Installing SeaTunnel with the following configuration:${CEND}"
@@ -267,6 +323,11 @@ else
       echo "  Node Role:       ${node_role}"
     fi
     echo "  JVM Heap:        ${jvm_heap_size}"
+    echo "  Metaspace:       ${jvm_metaspace_size}"
+    echo "  Direct Memory:   ${jvm_direct_memory_size:-auto}"
+    if [ "${jvm_auto_tune}" == "true" ]; then
+      echo "  Auto Tune:       enabled (based on ${Mem:-?}MB RAM, ${THREAD:-?} CPU threads)"
+    fi
     echo "  Connectors:      ${connectors}"
     echo
     

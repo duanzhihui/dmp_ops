@@ -4,7 +4,7 @@
 # Project: https://github.com/oneinstack/oneinstack
 
 # ===== 配置版本号（勿手动修改，由 options.conf.template 同步）=====
-conf_version=1
+conf_version=2
 
 # ===== 镜像源 =====
 mirror_link=https://mirrors.oneinstack.com/oneinstack/src
@@ -48,8 +48,19 @@ node_role=master
 hazelcast_port=5801
 
 # ===== JVM 配置 =====
-jvm_heap_size=2g
-jvm_metaspace_size=256m
+# 自动调优开关：true 时安装/调优脚本根据系统内存与 CPU 自动推荐 JVM 参数，
+# 下方留空的配置项将采用推荐值；手动填写的值优先于推荐值
+jvm_auto_tune=true
+# JVM 堆大小（如 2g / 1536m），留空则按系统内存自动计算
+jvm_heap_size=
+# Metaspace 大小，留空则按堆大小自动分档
+jvm_metaspace_size=
+# 堆外内存（Zeta 引擎 shuffle 使用），留空则约为堆的 50%
+jvm_direct_memory_size=
+# 客户端（提交作业进程）堆大小，留空则按系统内存自动分档
+jvm_client_heap_size=
+# GC 并行线程数，留空则按 CPU 线程数自动计算
+jvm_gc_threads=
 
 # ===== 连接器配置 =====
 # 需要安装的连接器列表（逗号分隔）
